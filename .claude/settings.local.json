@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(build.bat)",
+      "Bash(cmd.exe /c \"build.bat\")",
+      "Bash(cmake:*)",
+      "Bash(cmd.exe /c build.bat)",
+      "Bash(call build.bat)",
+      "Bash(where:*)",
+      "Bash(dir:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
