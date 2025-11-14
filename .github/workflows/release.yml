@@ -1,0 +1,140 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read version from VERSION file
+        id: get_version
+        shell: bash
+        run: |
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION)
+          else
+            VERSION="1.0.0"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version $VERSION"
+
+      - name: Setup MinGW
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: Build with CMake
+        shell: msys2 {0}
+        run: |
+          cmake -G Ninja -B build -S . -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+
+      - name: Create release directory
+        shell: bash
+        run: |
+          mkdir -p release
+          cp build/lander.exe release/
+          cp README.md release/ || echo "No README.md found"
+          cp LICENSE release/ || echo "No LICENSE found"
+          cp VERSION release/ || echo "No VERSION found"
+
+      - name: Create ZIP archive
+        shell: bash
+        run: |
+          cd release
+          7z a ../lander-v${{ steps.get_version.outputs.VERSION }}-windows.zip *
+
+      - name: Check if tag exists
+        id: check_tag
+        shell: bash
+        run: |
+          git fetch --tags
+          if git rev-parse "v${{ steps.get_version.outputs.VERSION }}" >/dev/null 2>&1; then
+            echo "TAG_EXISTS=true" >> $GITHUB_OUTPUT
+            echo "Tag v${{ steps.get_version.outputs.VERSION }} already exists"
+          else
+            echo "TAG_EXISTS=false" >> $GITHUB_OUTPUT
+            echo "Tag v${{ steps.get_version.outputs.VERSION }} does not exist"
+          fi
+
+      - name: Create and push tag
+        if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+        shell: bash
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag -a "v${{ steps.get_version.outputs.VERSION }}" -m "Release v${{ steps.get_version.outputs.VERSION }}"
+          git push origin "v${{ steps.get_version.outputs.VERSION }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: steps.check_tag.outputs.TAG_EXISTS == 'false'
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          name: Lunar Lander v${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## Lunar Lander v${{ steps.get_version.outputs.VERSION }}
+
+            Classic lunar lander game with retro graphics and realistic physics.
+
+            ### Features
+            - Apollo-style lunar module design
+            - Realistic terrain and landing mechanics
+            - Authentic rocket engine sounds
+            - Multiple difficulty levels
+            - High score tracking
+
+            ### How to Play
+            1. Download `lander-v${{ steps.get_version.outputs.VERSION }}-windows.zip`
+            2. Extract the ZIP file
+            3. Run `lander.exe`
+            4. Use ARROW KEYS or WASD to control thrusters
+            5. Land gently on the green landing pad
+
+            ### Controls
+            - **UP/W** - Main thruster
+            - **LEFT/A** - Rotate left
+            - **RIGHT/D** - Rotate right
+            - **ESC** - Return to menu
+            - **P** - Pause (during game)
+            - **H** - View high scores (from menu)
+
+            ### System Requirements
+            - Windows 7 or later
+            - No additional dependencies required
+
+            Built automatically by GitHub Actions
+          files: |
+            lander-v${{ steps.get_version.outputs.VERSION }}-windows.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update existing release
+        if: steps.check_tag.outputs.TAG_EXISTS == 'true'
+        shell: bash
+        run: |
+          echo "Tag already exists. Uploading asset to existing release..."
+          gh release upload "v${{ steps.get_version.outputs.VERSION }}" \
+            "lander-v${{ steps.get_version.outputs.VERSION }}-windows.zip" \
+            --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

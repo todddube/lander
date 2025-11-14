@@ -7,7 +7,8 @@
       "Bash(cmd.exe /c build.bat)",
       "Bash(call build.bat)",
       "Bash(where:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []
