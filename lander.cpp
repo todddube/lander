@@ -465,7 +465,8 @@ void ApplyThrust() {
             lander.vel.y -= THRUST_POWER * std::cos(lander.rotation);
             lander.vel.x += THRUST_POWER * std::sin(lander.rotation);
             lander.fuel -= FUEL_USAGE_MAIN;
-            if (rand() % 5 == 0) PlaySound_Thrust();
+            // Play rocket sound more frequently for realistic engine roar
+            if (rand() % 3 == 0) PlaySound_Thrust();
         }
     }
 
@@ -631,14 +632,37 @@ void RenderGame(HDC hdc) {
                                      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
             HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
 
-            RECT titleRect = {0, 150, WINDOW_WIDTH, 200};
+            RECT titleRect = {0, 100, WINDOW_WIDTH, 150};
             DrawText(hdcMem, L"LUNAR LANDER", -1, &titleRect,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
             SelectObject(hdcMem, hOldFont);
             DeleteObject(hFont);
 
+            // Version and copyright info
+            hFont = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
+            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
+
+            SetTextColor(hdcMem, RGB(180, 180, 180));
+            RECT versionRect = {0, 160, WINDOW_WIDTH, 180};
+            DrawText(hdcMem, L"v" LANDER_VERSION_STRING, -1, &versionRect,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            RECT copyrightRect = {0, 180, WINDOW_WIDTH, 200};
+            DrawText(hdcMem, L"Copyright (c) 2025 Todd Dube", -1, &copyrightRect,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            RECT githubRect = {0, 200, WINDOW_WIDTH, 220};
+            DrawText(hdcMem, L"github.com/todddube/lander", -1, &githubRect,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            SelectObject(hdcMem, hOldFont);
+            DeleteObject(hFont);
+
             // Instructions
+            SetTextColor(hdcMem, RGB(255, 255, 255));
             hFont = CreateFont(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                               CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
@@ -979,12 +1003,42 @@ void RenderGame(HDC hdc) {
             DrawText(hdcMem, L"Enter your name:", -1, &promptRect,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-            // Draw name input
+            // Draw name input box with dark background
             RECT nameRect = {WINDOW_WIDTH / 2 - 100, 300, WINDOW_WIDTH / 2 + 100, 340};
-            Rectangle(hdcMem, nameRect.left, nameRect.top, nameRect.right, nameRect.bottom);
 
+            // Fill background with dark color
+            HBRUSH hBrushInput = CreateSolidBrush(RGB(20, 20, 40));
+            FillRect(hdcMem, &nameRect, hBrushInput);
+            DeleteObject(hBrushInput);
+
+            // Draw border
+            HPEN hPenBorder = CreatePen(PS_SOLID, 2, RGB(0, 255, 0));
+            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenBorder);
+            SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
+            Rectangle(hdcMem, nameRect.left, nameRect.top, nameRect.right, nameRect.bottom);
+            SelectObject(hdcMem, hOldPen);
+            DeleteObject(hPenBorder);
+
+            // Draw text in bright green
+            SetTextColor(hdcMem, RGB(0, 255, 0));
             DrawText(hdcMem, playerName, -1, &nameRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
+            // Draw cursor blink
+            static int cursorBlink = 0;
+            cursorBlink = (cursorBlink + 1) % 60;
+            if (cursorBlink < 30 && nameLength < 20) {
+                SIZE textSize;
+                HDC hdcTemp = GetDC(nullptr);
+                SelectObject(hdcTemp, hFont);
+                GetTextExtentPoint32(hdcTemp, playerName, nameLength, &textSize);
+                ReleaseDC(nullptr, hdcTemp);
+
+                int cursorX = (WINDOW_WIDTH / 2) + (textSize.cx / 2) + 2;
+                MoveToEx(hdcMem, cursorX, nameRect.top + 10, nullptr);
+                LineTo(hdcMem, cursorX, nameRect.bottom - 10);
+            }
+
+            SetTextColor(hdcMem, RGB(255, 255, 255));
             RECT instructRect = {0, 380, WINDOW_WIDTH, 410};
             DrawText(hdcMem, L"Press ENTER when done", -1, &instructRect,
                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1127,10 +1181,14 @@ void LoadHighScores() {
 // ============================================================================
 
 /**
- * @brief Play thrust sound effect
+ * @brief Play thrust sound effect - realistic rocket roar
  */
 void PlaySound_Thrust() {
-    Beep(200, 20);
+    // Simulate rocket engine roar with multiple low frequencies
+    // Alternating between frequencies creates a rumbling effect
+    int baseFreq = 80 + (rand() % 40);  // Random variation 80-120 Hz
+    Beep(baseFreq, 15);
+    Beep(baseFreq + 30, 15);
 }
 
 /**
