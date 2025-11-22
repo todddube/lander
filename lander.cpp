@@ -138,6 +138,8 @@ struct Particle {
     Vector2 vel;
     int lifetime{0};  // Frames remaining
     int maxLifetime{0};
+    int type{0};  // 0=fire, 1=smoke, 2=debris
+    COLORREF color{RGB(255, 128, 0)};
 };
 
 /**
@@ -209,6 +211,13 @@ const wchar_t* HIGH_SCORE_FILE = L"lander_scores.dat";
 DWORD lastFrameTime = 0;
 constexpr DWORD TARGET_FRAME_TIME = 16;  // ~60 FPS
 
+// Sound state for realistic audio using waveOut
+bool thrustSoundActive = false;
+HANDLE thrustSoundThread = nullptr;
+HWAVEOUT hWaveOut = nullptr;
+WAVEHDR waveHeader[2] = {};
+bool soundInitialized = false;
+
 // ============================================================================
 // Function Prototypes
 // ============================================================================
@@ -241,6 +250,7 @@ bool IsHighScore(int newScore);
 
 // Sound generation
 void PlaySound_Thrust();
+void StopSound_Thrust();
 void PlaySound_Crash();
 void PlaySound_Landing();
 void PlaySound_MenuSelect();
@@ -385,6 +395,7 @@ void UpdateGame() {
                     lander.landed = true;
                     lander.vel = Vector2(0.0f, 0.0f);
                     gameState = GameState::LANDING_SUCCESS;
+                    StopSound_Thrust();  // Stop thrust sound on landing
                     PlaySound_Landing();
 
                     // Calculate score
@@ -404,6 +415,7 @@ void UpdateGame() {
                     lander.crashed = true;
                     lander.vel = Vector2(0.0f, 0.0f);
                     gameState = GameState::CRASHED;
+                    StopSound_Thrust();  // Stop thrust sound on crash
                     SpawnExplosion(lander.pos);
                     PlaySound_Crash();
                     lives--;
@@ -456,18 +468,22 @@ void ApplyThrust() {
     lander.leftThrusterOn = false;
     lander.rightThrusterOn = false;
 
-    if (lander.fuel <= 0.0f) return;
+    if (lander.fuel <= 0.0f) {
+        StopSound_Thrust();
+        return;
+    }
 
-    // Main thruster (up arrow or W)
-    if (keys[VK_UP] || keys['W']) {
+    // Main thruster (up arrow, W, or spacebar)
+    if (keys[VK_UP] || keys['W'] || keys[VK_SPACE]) {
         if (lander.fuel >= FUEL_USAGE_MAIN) {
             lander.mainThrusterOn = true;
             lander.vel.y -= THRUST_POWER * std::cos(lander.rotation);
             lander.vel.x += THRUST_POWER * std::sin(lander.rotation);
             lander.fuel -= FUEL_USAGE_MAIN;
-            // Play rocket sound more frequently for realistic engine roar
-            if (rand() % 3 == 0) PlaySound_Thrust();
+            PlaySound_Thrust();  // Start continuous thrust sound
         }
+    } else {
+        StopSound_Thrust();  // Stop sound when thruster is off
     }
 
     // Left thruster (left arrow or A)
@@ -556,20 +572,52 @@ bool CheckLandingPadCollision() {
 // ============================================================================
 
 /**
- * @brief Spawn explosion particles
+ * @brief Spawn explosion particles - enhanced with multiple particle types
  */
 void SpawnExplosion(const Vector2& pos) {
-    std::uniform_real_distribution<> velDist(-3.0f, 3.0f);
-    std::uniform_int_distribution<> lifeDist(30, 60);
+    std::uniform_real_distribution<> velDist(-5.0f, 5.0f);
+    std::uniform_real_distribution<> fastVelDist(-8.0f, 8.0f);
+    std::uniform_int_distribution<> lifeDist(20, 50);
+    std::uniform_int_distribution<> longLifeDist(40, 80);
+    std::uniform_int_distribution<> typeDist(0, 2);
 
-    for (int i = 0; i < 50; i++) {
+    // Create 150 particles for a more dramatic explosion
+    for (int i = 0; i < 150; i++) {
         Particle p;
         p.pos = pos;
-        p.vel = Vector2(
-            static_cast<float>(velDist(gen)),
-            static_cast<float>(velDist(gen))
-        );
-        p.maxLifetime = lifeDist(gen);
+        p.type = typeDist(gen);
+
+        // Different particle types have different properties
+        switch (p.type) {
+            case 0:  // Fire/explosion particles (fast, bright, short-lived)
+                p.vel = Vector2(
+                    static_cast<float>(fastVelDist(gen)),
+                    static_cast<float>(fastVelDist(gen)) - 2.0f  // Slight upward bias
+                );
+                p.maxLifetime = lifeDist(gen);
+                p.color = RGB(255, 100 + rand() % 156, 0);  // Orange to yellow
+                break;
+
+            case 1:  // Smoke particles (slower, gray, longer-lived)
+                p.vel = Vector2(
+                    static_cast<float>(velDist(gen)) * 0.5f,
+                    static_cast<float>(velDist(gen)) * 0.5f - 1.0f  // Float upward
+                );
+                p.maxLifetime = longLifeDist(gen);
+                p.color = RGB(100 + rand() % 100, 100 + rand() % 100, 100 + rand() % 100);
+                break;
+
+            case 2:  // Debris particles (medium speed, various colors)
+                p.vel = Vector2(
+                    static_cast<float>(velDist(gen)),
+                    static_cast<float>(velDist(gen))
+                );
+                p.maxLifetime = lifeDist(gen) + 20;
+                int brightness = 150 + rand() % 106;
+                p.color = RGB(brightness, brightness, brightness);
+                break;
+        }
+
         p.lifetime = p.maxLifetime;
         particles.push_back(p);
     }
@@ -669,12 +717,12 @@ void RenderGame(HDC hdc) {
             hOldFont = (HFONT)SelectObject(hdcMem, hFont);
 
             const wchar_t* instructions[] = {
-                L"ARROW KEYS or WASD to control thrusters",
-                L"Land gently on the flat landing pad",
+                L"ARROW KEYS or WASD to control",
+                L"SPACEBAR for main thruster",
+                L"Land gently on the green landing pad",
                 L"Watch your fuel and velocity!",
                 L"",
-                L"Press SPACE to start",
-                L"Press H for high scores"
+                L"Press SPACE to start | Press H for high scores"
             };
 
             int y = 280;
@@ -744,12 +792,24 @@ void RenderGame(HDC hdc) {
             SelectObject(hdcMem, hOldPen);
             DeleteObject(hPenTerrain);
 
-            // Draw particles
+            // Draw particles with enhanced rendering
             for (const auto& p : particles) {
                 float alpha = static_cast<float>(p.lifetime) / p.maxLifetime;
-                int color = static_cast<int>(255 * alpha);
-                SetPixel(hdcMem, static_cast<int>(p.pos.x), static_cast<int>(p.pos.y),
-                        RGB(color, color / 2, 0));
+
+                // Calculate faded color based on lifetime
+                int r = static_cast<int>(GetRValue(p.color) * alpha);
+                int g = static_cast<int>(GetGValue(p.color) * alpha);
+                int b = static_cast<int>(GetBValue(p.color) * alpha);
+
+                COLORREF fadedColor = RGB(r, g, b);
+
+                // Draw larger particles based on type
+                int size = (p.type == 2) ? 2 : 1;  // Debris is larger
+                for (int dx = 0; dx < size; dx++) {
+                    for (int dy = 0; dy < size; dy++) {
+                        SetPixel(hdcMem, static_cast<int>(p.pos.x) + dx, static_cast<int>(p.pos.y) + dy, fadedColor);
+                    }
+                }
             }
 
             // Draw Apollo-style lunar lander (if not crashed)
@@ -1181,21 +1241,203 @@ void LoadHighScores() {
 // ============================================================================
 
 /**
- * @brief Play thrust sound effect - realistic rocket roar
+ * @brief Generate realistic rocket engine sound buffer
+ * Creates white noise with low-pass filtering for authentic rocket roar
  */
-void PlaySound_Thrust() {
-    // Simulate rocket engine roar with multiple low frequencies
-    // Alternating between frequencies creates a rumbling effect
-    int baseFreq = 80 + (rand() % 40);  // Random variation 80-120 Hz
-    Beep(baseFreq, 15);
-    Beep(baseFreq + 30, 15);
+void GenerateRocketSound(short* buffer, int samples) {
+    static float filterState = 0.0f;
+    const float filterAlpha = 0.15f;  // Low-pass filter strength
+
+    for (int i = 0; i < samples; i++) {
+        // Generate white noise
+        float noise = static_cast<float>(rand() - RAND_MAX / 2) / (RAND_MAX / 2);
+
+        // Apply low-pass filter for deep rumble
+        filterState = filterState * (1.0f - filterAlpha) + noise * filterAlpha;
+
+        // Add some mid-frequency crackle (10% of signal)
+        float crackle = static_cast<float>(rand() - RAND_MAX / 2) / (RAND_MAX / 2) * 0.1f;
+
+        // Combine and amplify (balanced volume at 24000)
+        float sample = (filterState * 0.9f + crackle) * 24000.0f;
+
+        // Clamp to 16-bit range
+        if (sample > 32767.0f) sample = 32767.0f;
+        if (sample < -32768.0f) sample = -32768.0f;
+
+        buffer[i] = static_cast<short>(sample);
+    }
 }
 
 /**
- * @brief Play crash sound effect
+ * @brief Initialize audio system
+ */
+bool InitAudio() {
+    if (soundInitialized) return true;
+
+    WAVEFORMATEX wfx = {};
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = 1;
+    wfx.nSamplesPerSec = 22050;
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = wfx.nChannels * wfx.wBitsPerSample / 8;
+    wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+
+    if (waveOutOpen(&hWaveOut, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+        return false;
+    }
+
+    soundInitialized = true;
+    return true;
+}
+
+/**
+ * @brief Clean up audio system
+ */
+void CleanupAudio() {
+    if (hWaveOut) {
+        waveOutReset(hWaveOut);
+        waveOutClose(hWaveOut);
+        hWaveOut = nullptr;
+    }
+    soundInitialized = false;
+}
+
+/**
+ * @brief Thread function for continuous thrust sound
+ */
+DWORD WINAPI ThrustSoundThreadProc(LPVOID lpParam) {
+    (void)lpParam;
+
+    if (!InitAudio()) {
+        return 1;
+    }
+
+    const int bufferSize = 4410;  // 0.2 seconds at 22050 Hz
+    short* buffer1 = new short[bufferSize];
+    short* buffer2 = new short[bufferSize];
+
+    // Prepare wave headers
+    waveHeader[0].lpData = reinterpret_cast<LPSTR>(buffer1);
+    waveHeader[0].dwBufferLength = bufferSize * sizeof(short);
+    waveHeader[1].lpData = reinterpret_cast<LPSTR>(buffer2);
+    waveHeader[1].dwBufferLength = bufferSize * sizeof(short);
+
+    waveOutPrepareHeader(hWaveOut, &waveHeader[0], sizeof(WAVEHDR));
+    waveOutPrepareHeader(hWaveOut, &waveHeader[1], sizeof(WAVEHDR));
+
+    int currentBuffer = 0;
+
+    while (thrustSoundActive) {
+        WAVEHDR* pHdr = &waveHeader[currentBuffer];
+
+        // Wait if buffer is still playing
+        while ((pHdr->dwFlags & WHDR_DONE) == 0 && thrustSoundActive) {
+            Sleep(10);
+        }
+
+        if (!thrustSoundActive) break;
+
+        // Generate new sound data
+        short* buf = reinterpret_cast<short*>(pHdr->lpData);
+        GenerateRocketSound(buf, bufferSize);
+
+        // Reset flags and write
+        pHdr->dwFlags = 0;
+        waveOutWrite(hWaveOut, pHdr, sizeof(WAVEHDR));
+
+        currentBuffer = 1 - currentBuffer;  // Swap buffers
+    }
+
+    // Cleanup
+    waveOutReset(hWaveOut);
+    waveOutUnprepareHeader(hWaveOut, &waveHeader[0], sizeof(WAVEHDR));
+    waveOutUnprepareHeader(hWaveOut, &waveHeader[1], sizeof(WAVEHDR));
+
+    delete[] buffer1;
+    delete[] buffer2;
+
+    return 0;
+}
+
+/**
+ * @brief Start continuous thrust sound
+ */
+void PlaySound_Thrust() {
+    if (!thrustSoundActive) {
+        thrustSoundActive = true;
+        thrustSoundThread = CreateThread(nullptr, 0, ThrustSoundThreadProc, nullptr, 0, nullptr);
+    }
+}
+
+/**
+ * @brief Stop continuous thrust sound
+ */
+void StopSound_Thrust() {
+    if (thrustSoundActive) {
+        thrustSoundActive = false;
+        if (thrustSoundThread) {
+            WaitForSingleObject(thrustSoundThread, 1000);
+            CloseHandle(thrustSoundThread);
+            thrustSoundThread = nullptr;
+        }
+    }
+}
+
+/**
+ * @brief Generate realistic explosion sound
+ */
+void GenerateExplosionSound(short* buffer, int samples) {
+    for (int i = 0; i < samples; i++) {
+        float t = static_cast<float>(i) / samples;
+
+        // Generate white noise for explosion texture
+        float noise = static_cast<float>(rand() - RAND_MAX / 2) / (RAND_MAX / 2);
+
+        // Exponential decay envelope (sharp attack, long decay)
+        float envelope = std::exp(-t * 5.0f);
+
+        // Add deep bass rumble (sine wave with decay)
+        float bass = std::sin(t * 3.14159f * 40.0f) * envelope * 0.5f;
+
+        // Combine noise and bass with envelope (reduced volume to 22000)
+        float sample = (noise * envelope * 0.8f + bass) * 22000.0f;
+
+        // Clamp to 16-bit range
+        if (sample > 32767.0f) sample = 32767.0f;
+        if (sample < -32768.0f) sample = -32768.0f;
+
+        buffer[i] = static_cast<short>(sample);
+    }
+}
+
+/**
+ * @brief Play crash sound effect with realistic explosion
  */
 void PlaySound_Crash() {
-    Beep(100, 300);
+    if (!InitAudio()) {
+        Beep(100, 300);  // Fallback
+        return;
+    }
+
+    const int bufferSize = 22050;  // 1 second explosion
+    short* explosionBuffer = new short[bufferSize];
+    GenerateExplosionSound(explosionBuffer, bufferSize);
+
+    WAVEHDR hdr = {};
+    hdr.lpData = reinterpret_cast<LPSTR>(explosionBuffer);
+    hdr.dwBufferLength = bufferSize * sizeof(short);
+
+    waveOutPrepareHeader(hWaveOut, &hdr, sizeof(WAVEHDR));
+    waveOutWrite(hWaveOut, &hdr, sizeof(WAVEHDR));
+
+    // Wait for sound to finish
+    while (!(hdr.dwFlags & WHDR_DONE)) {
+        Sleep(10);
+    }
+
+    waveOutUnprepareHeader(hWaveOut, &hdr, sizeof(WAVEHDR));
+    delete[] explosionBuffer;
 }
 
 /**
@@ -1212,6 +1454,37 @@ void PlaySound_Landing() {
  */
 void PlaySound_MenuSelect() {
     Beep(440, 100);
+}
+
+/**
+ * @brief Thread function for soft retro intro sound
+ * Inspired by original lunar lander arcade game
+ */
+DWORD WINAPI IntroSoundThreadProc(LPVOID lpParam) {
+    (void)lpParam;
+
+    // Soft retro beep sequence - like original lunar lander
+    // Short, quiet ascending tones
+    Beep(349, 80);   // F4 - soft and short
+    Sleep(20);
+    Beep(392, 80);   // G4
+    Sleep(20);
+    Beep(440, 80);   // A4
+    Sleep(20);
+    Beep(523, 120);  // C5 - slightly longer ending
+
+    return 0;
+}
+
+/**
+ * @brief Play soft retro intro sound in background
+ */
+void PlaySound_Intro() {
+    // Play in background thread so it doesn't block startup
+    HANDLE hThread = CreateThread(nullptr, 0, IntroSoundThreadProc, nullptr, 0, nullptr);
+    if (hThread) {
+        CloseHandle(hThread);  // We don't need to wait for it
+    }
 }
 
 // ============================================================================
@@ -1247,9 +1520,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             LoadHighScores();
             InitStars();
             SetTimer(hwnd, 1, TARGET_FRAME_TIME, nullptr);
+            PlaySound_Intro();  // Play funny intro sound on startup
             return 0;
 
         case WM_DESTROY:
+            StopSound_Thrust();  // Clean up sound thread
+            CleanupAudio();      // Clean up audio system
             SaveHighScores();
             PostQuitMessage(0);
             return 0;
