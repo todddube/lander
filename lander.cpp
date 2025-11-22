@@ -52,8 +52,8 @@ constexpr float THRUST_POWER = 0.12f;      // Upward acceleration from main thru
 constexpr float SIDE_THRUST_POWER = 0.08f; // Horizontal acceleration from side thrusters
 constexpr float MAX_VELOCITY = 15.0f;      // Terminal velocity
 constexpr float SAFE_LANDING_SPEED = 1.5f; // Maximum safe landing velocity
-constexpr float FUEL_USAGE_MAIN = 0.5f;    // Fuel consumed per frame for main thruster
-constexpr float FUEL_USAGE_SIDE = 0.3f;    // Fuel consumed per frame for side thrusters
+constexpr float FUEL_USAGE_MAIN = 0.3f;    // Fuel consumed per frame for main thruster
+constexpr float FUEL_USAGE_SIDE = 0.15f;    // Fuel consumed per frame for side thrusters
 constexpr float INITIAL_FUEL = 100.0f;     // Starting fuel amount
 constexpr int TERRAIN_POINTS = 100;        // Number of terrain vertices
 constexpr int MIN_LANDING_PAD_WIDTH = 40;  // Minimum width of landing pad
@@ -138,8 +138,11 @@ struct Particle {
     Vector2 vel;
     int lifetime{0};  // Frames remaining
     int maxLifetime{0};
-    int type{0};  // 0=fire, 1=smoke, 2=debris
+    int type{0};  // 0=fire, 1=smoke, 2=debris, 3=lander_debris
     COLORREF color{RGB(255, 128, 0)};
+    float rotation{0.0f};       // For lander debris
+    float rotationSpeed{0.0f};  // For lander debris
+    Vector2 endPos{0.0f, 0.0f}; // For drawing lines (lander pieces)
 };
 
 /**
@@ -240,6 +243,7 @@ bool CheckLandingPadCollision();
 
 // Particles
 void SpawnExplosion(const Vector2& pos);
+void SpawnLanderDebris(const Vector2& pos, float rotation);
 void UpdateParticles();
 
 // High scores
@@ -417,6 +421,7 @@ void UpdateGame() {
                     gameState = GameState::CRASHED;
                     StopSound_Thrust();  // Stop thrust sound on crash
                     SpawnExplosion(lander.pos);
+                    SpawnLanderDebris(lander.pos, lander.rotation);  // Break apart lander
                     PlaySound_Crash();
                     lives--;
                 }
@@ -624,6 +629,66 @@ void SpawnExplosion(const Vector2& pos) {
 }
 
 /**
+ * @brief Spawn lander debris pieces - visual breakup on crash
+ */
+void SpawnLanderDebris(const Vector2& pos, float rotation) {
+    std::uniform_real_distribution<> velDist(-4.0f, 4.0f);
+    std::uniform_real_distribution<> spinDist(-0.2f, 0.2f);
+    std::uniform_int_distribution<> lifeDist(60, 120);
+
+    float cos_r = std::cos(rotation);
+    float sin_r = std::sin(rotation);
+
+    // Create debris pieces representing lander structure breaking apart
+    // Each piece is a line segment with endpoints
+
+    // Body fragments (4 pieces from the main body)
+    for (int i = 0; i < 4; i++) {
+        Particle p;
+        p.type = 3;  // Lander debris
+        p.pos = pos;
+        p.vel = Vector2(
+            static_cast<float>(velDist(gen)),
+            static_cast<float>(velDist(gen)) - 2.0f  // Initial upward burst
+        );
+        p.rotation = rotation + (rand() % 100 - 50) * 0.01f;
+        p.rotationSpeed = static_cast<float>(spinDist(gen));
+        p.maxLifetime = lifeDist(gen);
+        p.lifetime = p.maxLifetime;
+        p.color = RGB(220, 220, 220);  // Lander color
+
+        // Different body pieces
+        switch (i) {
+            case 0: p.endPos = Vector2(16.0f, 0.0f); break;   // Top piece
+            case 1: p.endPos = Vector2(-16.0f, 0.0f); break;  // Bottom piece
+            case 2: p.endPos = Vector2(0.0f, 12.0f); break;   // Side piece
+            case 3: p.endPos = Vector2(0.0f, -12.0f); break;  // Other side
+        }
+
+        particles.push_back(p);
+    }
+
+    // Landing leg fragments (4 legs breaking off)
+    for (int i = 0; i < 4; i++) {
+        Particle p;
+        p.type = 3;  // Lander debris
+        p.pos = pos;
+        p.vel = Vector2(
+            static_cast<float>(velDist(gen)) * 1.5f,  // Legs fly farther
+            static_cast<float>(velDist(gen))
+        );
+        p.rotation = rotation + (rand() % 360) * 0.0174f;  // Random rotation
+        p.rotationSpeed = static_cast<float>(spinDist(gen)) * 2.0f;  // Spin faster
+        p.maxLifetime = lifeDist(gen);
+        p.lifetime = p.maxLifetime;
+        p.color = RGB(180, 180, 180);  // Slightly darker for legs
+        p.endPos = Vector2(10.0f + rand() % 5, 0.0f);  // Leg length
+
+        particles.push_back(p);
+    }
+}
+
+/**
  * @brief Update all particles
  */
 void UpdateParticles() {
@@ -631,6 +696,11 @@ void UpdateParticles() {
         it->pos += it->vel;
         it->vel.y += GRAVITY / 2.0f;  // Half gravity for particles
         it->lifetime--;
+
+        // Update rotation for lander debris
+        if (it->type == 3) {
+            it->rotation += it->rotationSpeed;
+        }
 
         if (it->lifetime <= 0) {
             it = particles.erase(it);
@@ -803,11 +873,32 @@ void RenderGame(HDC hdc) {
 
                 COLORREF fadedColor = RGB(r, g, b);
 
-                // Draw larger particles based on type
-                int size = (p.type == 2) ? 2 : 1;  // Debris is larger
-                for (int dx = 0; dx < size; dx++) {
-                    for (int dy = 0; dy < size; dy++) {
-                        SetPixel(hdcMem, static_cast<int>(p.pos.x) + dx, static_cast<int>(p.pos.y) + dy, fadedColor);
+                if (p.type == 3) {
+                    // Lander debris - draw as rotating line segments
+                    HPEN hPenDebris = CreatePen(PS_SOLID, 2, fadedColor);
+                    HPEN hOldPenDebris = (HPEN)SelectObject(hdcMem, hPenDebris);
+
+                    // Calculate rotated endpoints
+                    float cos_r = std::cos(p.rotation);
+                    float sin_r = std::sin(p.rotation);
+
+                    int x1 = static_cast<int>(p.pos.x);
+                    int y1 = static_cast<int>(p.pos.y);
+                    int x2 = static_cast<int>(p.pos.x + (p.endPos.x * cos_r - p.endPos.y * sin_r));
+                    int y2 = static_cast<int>(p.pos.y + (p.endPos.x * sin_r + p.endPos.y * cos_r));
+
+                    MoveToEx(hdcMem, x1, y1, nullptr);
+                    LineTo(hdcMem, x2, y2);
+
+                    SelectObject(hdcMem, hOldPenDebris);
+                    DeleteObject(hPenDebris);
+                } else {
+                    // Regular particles (fire, smoke, debris)
+                    int size = (p.type == 2) ? 2 : 1;  // Debris is larger
+                    for (int dx = 0; dx < size; dx++) {
+                        for (int dy = 0; dy < size; dy++) {
+                            SetPixel(hdcMem, static_cast<int>(p.pos.x) + dx, static_cast<int>(p.pos.y) + dy, fadedColor);
+                        }
                     }
                 }
             }
@@ -1242,24 +1333,33 @@ void LoadHighScores() {
 
 /**
  * @brief Generate realistic rocket engine sound buffer
- * Creates white noise with low-pass filtering for authentic rocket roar
+ * Creates powerful rocket thrust with deep bass rumble and white noise
  */
 void GenerateRocketSound(short* buffer, int samples) {
     static float filterState = 0.0f;
-    const float filterAlpha = 0.15f;  // Low-pass filter strength
+    static float deepFilterState = 0.0f;
+    const float filterAlpha = 0.15f;      // Low-pass filter
+    const float deepFilterAlpha = 0.05f;   // Extra deep bass filter
 
     for (int i = 0; i < samples; i++) {
         // Generate white noise
         float noise = static_cast<float>(rand() - RAND_MAX / 2) / (RAND_MAX / 2);
 
-        // Apply low-pass filter for deep rumble
+        // Apply two stages of low-pass filtering for deeper rumble
         filterState = filterState * (1.0f - filterAlpha) + noise * filterAlpha;
+        deepFilterState = deepFilterState * (1.0f - deepFilterAlpha) + filterState * deepFilterAlpha;
 
-        // Add some mid-frequency crackle (10% of signal)
-        float crackle = static_cast<float>(rand() - RAND_MAX / 2) / (RAND_MAX / 2) * 0.1f;
+        // Add deep bass rumble (sub-bass frequency ~30-50 Hz)
+        float bassPhase = static_cast<float>(i) * 40.0f / 22050.0f;
+        float deepBass = std::sin(bassPhase * 6.28318f) * 0.4f;
 
-        // Combine and amplify (balanced volume at 24000)
-        float sample = (filterState * 0.9f + crackle) * 24000.0f;
+        // Add mid-frequency engine roar
+        float midPhase = static_cast<float>(i) * 120.0f / 22050.0f;
+        float midRoar = std::sin(midPhase * 6.28318f) * 0.2f;
+
+        // Combine all elements for powerful rocket sound
+        // 50% deep filtered noise, 30% sub-bass, 20% mid roar
+        float sample = (deepFilterState * 0.5f + deepBass + midRoar) * 32000.0f;
 
         // Clamp to 16-bit range
         if (sample > 32767.0f) sample = 32767.0f;
@@ -1317,22 +1417,32 @@ DWORD WINAPI ThrustSoundThreadProc(LPVOID lpParam) {
     short* buffer1 = new short[bufferSize];
     short* buffer2 = new short[bufferSize];
 
-    // Prepare wave headers
+    // Initialize headers
+    ZeroMemory(&waveHeader[0], sizeof(WAVEHDR));
+    ZeroMemory(&waveHeader[1], sizeof(WAVEHDR));
+
     waveHeader[0].lpData = reinterpret_cast<LPSTR>(buffer1);
     waveHeader[0].dwBufferLength = bufferSize * sizeof(short);
     waveHeader[1].lpData = reinterpret_cast<LPSTR>(buffer2);
     waveHeader[1].dwBufferLength = bufferSize * sizeof(short);
 
+    // Generate initial sound data for both buffers
+    GenerateRocketSound(buffer1, bufferSize);
+    GenerateRocketSound(buffer2, bufferSize);
+
+    // Prepare and queue both buffers
     waveOutPrepareHeader(hWaveOut, &waveHeader[0], sizeof(WAVEHDR));
     waveOutPrepareHeader(hWaveOut, &waveHeader[1], sizeof(WAVEHDR));
+    waveOutWrite(hWaveOut, &waveHeader[0], sizeof(WAVEHDR));
+    waveOutWrite(hWaveOut, &waveHeader[1], sizeof(WAVEHDR));
 
     int currentBuffer = 0;
 
     while (thrustSoundActive) {
         WAVEHDR* pHdr = &waveHeader[currentBuffer];
 
-        // Wait if buffer is still playing
-        while ((pHdr->dwFlags & WHDR_DONE) == 0 && thrustSoundActive) {
+        // Wait for current buffer to finish playing
+        while (!(pHdr->dwFlags & WHDR_DONE) && thrustSoundActive) {
             Sleep(10);
         }
 
@@ -1342,8 +1452,7 @@ DWORD WINAPI ThrustSoundThreadProc(LPVOID lpParam) {
         short* buf = reinterpret_cast<short*>(pHdr->lpData);
         GenerateRocketSound(buf, bufferSize);
 
-        // Reset flags and write
-        pHdr->dwFlags = 0;
+        // Write buffer again
         waveOutWrite(hWaveOut, pHdr, sizeof(WAVEHDR));
 
         currentBuffer = 1 - currentBuffer;  // Swap buffers
@@ -1385,7 +1494,7 @@ void StopSound_Thrust() {
 }
 
 /**
- * @brief Generate realistic explosion sound
+ * @brief Generate realistic explosion sound - DEEP BOOM with massive bass
  */
 void GenerateExplosionSound(short* buffer, int samples) {
     for (int i = 0; i < samples; i++) {
@@ -1394,14 +1503,31 @@ void GenerateExplosionSound(short* buffer, int samples) {
         // Generate white noise for explosion texture
         float noise = static_cast<float>(rand() - RAND_MAX / 2) / (RAND_MAX / 2);
 
-        // Exponential decay envelope (sharp attack, long decay)
-        float envelope = std::exp(-t * 5.0f);
+        // Exponential decay envelope
+        float envelope = std::exp(-t * 4.0f);
 
-        // Add deep bass rumble (sine wave with decay)
-        float bass = std::sin(t * 3.14159f * 40.0f) * envelope * 0.5f;
+        // DEEP BASS BOOM - Multiple sub-bass frequencies layered
+        float deepBoom1 = std::sin(t * 3.14159f * 15.0f) * envelope * 0.8f;   // 15 Hz - ultra deep
+        float deepBoom2 = std::sin(t * 3.14159f * 30.0f) * envelope * 0.6f;   // 30 Hz - deep bass
+        float deepBoom3 = std::sin(t * 3.14159f * 50.0f) * envelope * 0.4f;   // 50 Hz - bass rumble
 
-        // Combine noise and bass with envelope (reduced volume to 22000)
-        float sample = (noise * envelope * 0.8f + bass) * 22000.0f;
+        // Initial WHUMP (concentrated in first 20%)
+        float whump = 0.0f;
+        if (t < 0.2f) {
+            float whumpEnv = std::exp(-t * 20.0f);
+            whump = std::sin(t * 3.14159f * 20.0f) * whumpEnv * 1.5f;  // Massive initial impact
+        }
+
+        // Low-frequency rumble (filtered noise for texture)
+        static float filterState = 0.0f;
+        filterState = filterState * 0.95f + noise * 0.05f;  // Heavy low-pass filter
+        float rumble = filterState * envelope * 0.7f;
+
+        // Mid-range explosion body (gives it substance)
+        float body = std::sin(t * 3.14159f * 80.0f) * envelope * 0.3f;
+
+        // Combine all elements for MASSIVE explosion
+        float sample = (whump + deepBoom1 + deepBoom2 + deepBoom3 + rumble + body) * 32000.0f;
 
         // Clamp to 16-bit range
         if (sample > 32767.0f) sample = 32767.0f;
@@ -1457,27 +1583,45 @@ void PlaySound_MenuSelect() {
 }
 
 /**
- * @brief Thread function for soft retro intro sound
- * Inspired by original lunar lander arcade game
+ * @brief Thread function for fast 3-second retro intro sound
+ * Classic space game intro with lunar lander theme - FAST!
  */
 DWORD WINAPI IntroSoundThreadProc(LPVOID lpParam) {
     (void)lpParam;
 
-    // Soft retro beep sequence - like original lunar lander
-    // Short, quiet ascending tones
-    Beep(349, 80);   // F4 - soft and short
-    Sleep(20);
-    Beep(392, 80);   // G4
-    Sleep(20);
-    Beep(440, 80);   // A4
-    Sleep(20);
-    Beep(523, 120);  // C5 - slightly longer ending
+    // FAST 3-SECOND RETRO INTRO - Lunar Lander Theme!
+    // Part 1: Dramatic space opening (0-0.85 seconds)
+    Beep(196, 210);   // G3 - Deep space bass
+    Beep(220, 140);   // A3
+    Beep(247, 140);   // B3
+    Beep(262, 280);   // C4 - Building tension
+    Sleep(70);
+
+    // Part 2: Ascending rocket launch sequence (0.85-1.6 seconds)
+    Beep(294, 105);   // D4 - Faster now!
+    Beep(330, 105);   // E4
+    Beep(349, 105);   // F4
+    Beep(392, 105);   // G4
+    Beep(440, 140);   // A4 - Getting higher!
+    Beep(494, 140);   // B4
+    Sleep(35);
+
+    // Part 3: Triumphant lunar arrival (1.6-3.0 seconds)
+    Beep(523, 175);   // C5 - Peak!
+    Sleep(35);
+    Beep(523, 105);   // C5 - Echo
+    Beep(440, 105);   // A4
+    Beep(523, 105);   // C5
+    Beep(587, 280);   // D5 - Victory!
+    Sleep(70);
+    Beep(523, 210);   // C5 - Final heroic note
+    Beep(392, 280);   // G4 - Settling on the moon
 
     return 0;
 }
 
 /**
- * @brief Play soft retro intro sound in background
+ * @brief Play fast 3-second retro intro sound in background
  */
 void PlaySound_Intro() {
     // Play in background thread so it doesn't block startup
