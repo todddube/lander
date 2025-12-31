@@ -12,7 +12,9 @@
       "Bash(cmd.exe /c \"build.bat 2>&1\")",
       "Bash(cmd.exe /c \"cd /d C:\\Users\\todd\\OneDrive\\Documents\\GitHub\\lander && build.bat\")",
       "Bash(cmd.exe /c \"cd /d C:\\Users\\todd\\OneDrive\\Documents\\GitHub\\lander && call build.bat 2>&1\")",
-      "Bash(cmd.exe /c:*)"
+      "Bash(cmd.exe /c:*)",
+      "Bash(del \"c:\\\\Users\\\\todd\\\\OneDrive\\\\Documents\\\\GitHub\\\\lander\\\\RELEASE.md\")",
+      "Bash(del \"c:\\\\Users\\\\todd\\\\OneDrive\\\\Documents\\\\GitHub\\\\lander\\\\RELEASE_GUIDE.md\")"
     ],
     "deny": [],
     "ask": []

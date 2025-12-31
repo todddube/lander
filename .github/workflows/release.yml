@@ -97,7 +97,8 @@ jobs:
             ### Features
             - Apollo-style lunar module design
             - Realistic terrain and landing mechanics
-            - Authentic rocket engine sounds
+            - Authentic rocket engine sounds with space frontier intro
+            - Epic arcade-style explosion effects
             - Multiple difficulty levels
             - High score tracking
 
@@ -109,18 +110,23 @@ jobs:
             5. Land gently on the green landing pad
 
             ### Controls
-            - **UP/W** - Main thruster
-            - **LEFT/A** - Rotate left
-            - **RIGHT/D** - Rotate right
-            - **ESC** - Return to menu
-            - **P** - Pause (during game)
-            - **H** - View high scores (from menu)
+            | Key | Action |
+            |-----|--------|
+            | UP / W / SPACE | Main thruster |
+            | LEFT / A | Rotate left |
+            | RIGHT / D | Rotate right |
+            | P | Pause game |
+            | Q | Quit (with confirmation) |
+            | R | Restart (with confirmation) |
+            | H | High scores (from menu) |
+            | ESC | Return to menu |
 
             ### System Requirements
             - Windows 7 or later
             - No additional dependencies required
 
-            Built automatically by GitHub Actions
+            ---
+            *Built automatically by GitHub Actions*
           files: |
             lander-v${{ steps.get_version.outputs.VERSION }}-windows.zip
           draft: false

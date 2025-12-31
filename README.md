@@ -1,10 +1,10 @@
-# 🚀 Lunar Lander
+# Lunar Lander
 
 A classic lunar lander game for Windows, written in C++17 using Win32 GDI API. Navigate your spacecraft through space and land safely on the moon's surface while managing fuel and velocity!
 
-## ✨ Features
+## Features
 
-### 🎮 Gameplay
+### Gameplay
 - **Physics Simulation** - Realistic gravity and thrust mechanics
 - **Fuel Management** - Limited fuel requires careful thruster control
 - **Landing Pads** - Find and land on designated safe zones
@@ -12,20 +12,21 @@ A classic lunar lander game for Windows, written in C++17 using Win32 GDI API. N
 - **Lives System** - Three lives to achieve the highest score
 - **Particle Effects** - Dynamic explosion and thruster particles
 
-### 📊 Progression
+### Progression
 - **Score System** - Points for successful landings, fuel conservation, and speed
 - **High Score Tracking** - Persistent top 10 scores with names
 - **Level Advancement** - Terrain gets more challenging each level
 - **Bonus Scoring** - Extra points for gentle landings and center pad hits
 
-### 🎨 Presentation
+### Presentation
 - **Vector Graphics** - Clean, classic arcade-style visuals
 - **Starfield Background** - Dynamic space environment
 - **Terrain Generation** - Procedural terrain for each level
 - **Real-time HUD** - Displays score, level, lives, fuel, and velocity
-- **Sound Effects** - Beep-based thrust, crash, and landing sounds
+- **Sound Effects** - Realistic rocket thrust and explosion sounds
+- **Space Frontier Intro** - Cinematic startup theme
 
-### 🔧 Technical
+### Technical
 - **Single File Design** - Entire game in one C++ file
 - **No External Dependencies** - Only Windows SDK required
 - **Modern C++17** - Clean, modern codebase
@@ -34,43 +35,90 @@ A classic lunar lander game for Windows, written in C++17 using Win32 GDI API. N
 
 ---
 
-## 📥 Quick Start
+## Building from Source
 
-### Download & Run
-1. Download `lander.exe` from the [latest release](../../releases)
-2. Double-click to play!
+### Prerequisites
 
-### Building from Source
+You need one of the following installed on Windows:
+
+| Option | What to Install |
+|--------|-----------------|
+| **CMake (Recommended)** | [CMake 3.20+](https://cmake.org/download/) + [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) or MinGW |
+| **Visual Studio** | [Visual Studio 2019+](https://visualstudio.microsoft.com/downloads/) with "Desktop development with C++" workload |
+| **MinGW** | [MinGW-w64](https://www.mingw-w64.org/downloads/) - Add `bin` folder to PATH |
+
+### Quick Build
+
 ```batch
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/todddube/lander.git
 cd lander
 
-# Build using CMake (recommended)
-cmake -B build -S .
-cmake --build build --config Release
-
-# Or use the smart build script
+# Build (uses CMake, falls back to MSVC or MinGW)
 build.bat
 
 # Run the game
 build\lander.exe
 ```
 
+### Build Methods
+
+#### CMake (Recommended)
+```batch
+# Configure
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build --config Release
+
+# Run
+build\lander.exe
+```
+
+#### Visual Studio (Developer Command Prompt)
+```batch
+# Open "Developer Command Prompt for VS" first
+cl /O2 /EHsc /std:c++17 /W4 /I.\build /Fe:build\lander.exe lander.cpp user32.lib gdi32.lib winmm.lib
+```
+
+#### MinGW
+```batch
+g++ -std=c++17 -O2 -Wall -Wextra -I./build -o build\lander.exe lander.cpp -luser32 -lgdi32 -lwinmm -mwindows
+```
+
+### Build Script Options
+
+```batch
+build.bat              # Release build (default)
+build.bat Debug        # Debug build
+build.bat 1.2.0        # Build with specific version
+build.bat 1.2.0 Debug  # Version + Debug
+```
+
+### Build Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `'cmake' is not recognized` | Install CMake and add to PATH |
+| `'cl' is not recognized` | Use "Developer Command Prompt for VS" |
+| `'g++' is not recognized` | Add MinGW bin directory to PATH |
+| Linker errors | Ensure linking `user32.lib`, `gdi32.lib`, `winmm.lib` |
+
 ---
 
-## 🎮 How to Play
+## How to Play
 
 ### Controls
 
 | Key | Action |
 |-----|--------|
-| **↑ / W** | Main thruster (upward thrust) |
-| **← / A** | Left thruster (rotate left) |
-| **→ / D** | Right thruster (rotate right) |
-| **SPACE** | Start game / Restart |
-| **H** | View high scores |
+| **UP / W / SPACE** | Main thruster (upward thrust) |
+| **LEFT / A** | Rotate left |
+| **RIGHT / D** | Rotate right |
 | **P** | Pause game |
+| **Q** | Quit (shows confirmation during game) |
+| **R** | Restart (shows confirmation during game) |
+| **H** | View high scores (from title screen) |
 | **ESC** | Return to title screen |
 
 ### Gameplay
@@ -86,17 +134,15 @@ build\lander.exe
 
 ### Landing Requirements
 
-✅ **Safe Landing:**
+**Safe Landing:**
 - Velocity < 1.5
 - Nearly vertical orientation
 - Touch down on green landing pad
-- Lander intact
 
-❌ **Crash:**
+**Crash:**
 - Too fast (velocity > 1.5)
 - Tilted too far
 - Hit terrain outside landing pad
-- Out of fuel before landing
 
 ### Scoring
 
@@ -107,78 +153,45 @@ build\lander.exe
 
 ---
 
-## 🏗️ Building
-
-### Prerequisites
-- Windows 10/11
-- One of the following:
-  - CMake 3.20+ (recommended)
-  - Visual Studio 2019+ (MSVC)
-  - MinGW-w64 (GCC)
-
-### Build Methods
-
-#### CMake (Recommended)
-```batch
-# Configure
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-
-# Build
-cmake --build build --config Release
-
-# Output: build\lander.exe
-```
-
-#### Visual Studio (MSVC)
-```batch
-# Open Developer Command Prompt
-cl /Zi /EHsc /std:c++17 /W4 /Fe:build\lander.exe lander.cpp user32.lib gdi32.lib winmm.lib
-```
-
-#### MinGW
-```batch
-g++ -std=c++17 -O2 -Wall -Wextra -o build\lander.exe lander.cpp -luser32 -lgdi32 -lwinmm -mwindows
-```
-
-#### Smart Build Script
-```batch
-# Tries CMake, falls back to MSVC, then MinGW
-build.bat
-
-# Build with specific version
-build.bat 1.0.0
-
-# Debug build
-build.bat Debug
-```
-
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 lander/
 ├── lander.cpp          # Main game source (single file)
-├── lander.rc           # Windows resource file
-├── lander.manifest     # Windows manifest (DPI, compatibility)
 ├── CMakeLists.txt      # CMake build configuration
 ├── build.bat           # Smart build script
-├── VERSION             # Semantic version number
+├── VERSION             # Version number (e.g., 1.0.0)
 ├── version.h.in        # Version header template
+├── lander.rc.in        # Windows resource template
 ├── README.md           # This file
 ├── CHANGELOG.md        # Version history
 ├── CLAUDE.md           # AI development guidelines
-├── RELEASE.md          # Release process documentation
 ├── .gitignore          # Git exclusions
+├── .github/
+│   └── workflows/      # GitHub Actions (CI/CD)
+│       ├── build.yml   # Build verification
+│       └── release.yml # Automated releases
 └── build/              # Build output directory
 ```
 
 ---
 
-## 🎯 Technical Details
+## Releases
+
+Releases are automated via GitHub Actions:
+
+1. **Update version**: Edit the `VERSION` file (e.g., `1.0.1`)
+2. **Commit and push**: `git commit -am "Bump to 1.0.1" && git push`
+3. **Automatic**: GitHub Actions builds, creates tag, and publishes release
+
+See [Releases](https://github.com/todddube/lander/releases) for download.
+
+---
+
+## Technical Details
 
 ### Architecture
-- **Single-file design** - All code in `lander.cpp` (~1200 lines)
+- **Single-file design** - All code in `lander.cpp` (~2000 lines)
 - **Entity-component pattern** - Lander, terrain, particles
 - **State machine** - Clean game state management
 - **Double buffering** - Flicker-free rendering
@@ -195,9 +208,11 @@ lander/
 - **Particle system** - Explosion and thruster effects
 - **Procedural terrain** - Runtime-generated landscapes
 
-### Data Persistence
-- **High scores** - Binary file storage (`lander_scores.dat`)
-- **Score tracking** - Top 10 scores with names and levels
+### Audio
+- **waveOut API** - Custom synthesized sounds
+- **Rocket thrust** - Continuous engine rumble
+- **Explosion** - Multi-phase KABOOM effect
+- **Space theme** - Cinematic intro music
 
 ### Compatibility
 - **Windows 7+** - Full compatibility
@@ -206,31 +221,12 @@ lander/
 
 ---
 
-## 🔊 Sound
-
-The game uses Windows Beep API for sound effects:
-- **Thrust** - Short beep during thruster activation
-- **Landing** - Musical sequence for successful landing
-- **Crash** - Low-frequency explosion sound
-
----
-
-## 🏆 High Scores
-
-High scores are automatically saved to `lander_scores.dat` in the game directory. The top 10 scores are tracked with player names and the level reached.
-
----
-
-## 📝 License
+## License
 
 Copyright (c) 2025 Todd Dube
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 Inspired by the classic 1969 Lunar Lander arcade game and its many variants.
-
----
-
-**Enjoy the game! 🌙🚀**
