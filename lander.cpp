@@ -138,11 +138,25 @@ struct Particle {
     Vector2 vel;
     int lifetime{0};  // Frames remaining
     int maxLifetime{0};
-    int type{0};  // 0=fire, 1=smoke, 2=debris, 3=lander_debris
+    int type{0};  // 0=fire, 1=smoke, 2=debris, 3=lander_debris, 4=spark, 5=flash
     COLORREF color{RGB(255, 128, 0)};
     float rotation{0.0f};       // For lander debris
     float rotationSpeed{0.0f};  // For lander debris
     Vector2 endPos{0.0f, 0.0f}; // For drawing lines (lander pieces)
+    float size{1.0f};           // For variable-sized particles
+};
+
+/**
+ * @brief Shockwave ring for explosion effect
+ */
+struct Shockwave {
+    Vector2 pos;
+    float radius{0.0f};
+    float maxRadius{100.0f};
+    float expandSpeed{8.0f};
+    int lifetime{0};
+    int maxLifetime{20};
+    COLORREF color{RGB(255, 200, 100)};
 };
 
 /**
@@ -164,6 +178,20 @@ struct HighScore {
 };
 
 /**
+ * @brief Background lander for title screen animation
+ */
+struct BackgroundLander {
+    Vector2 pos{0.0f, 0.0f};
+    Vector2 vel{0.0f, 0.0f};
+    float rotation{0.0f};
+    float targetY{0.0f};           // Where it's trying to land
+    bool landed{false};
+    bool thrusterOn{false};
+    int landedTimer{0};            // How long it's been landed
+    float scale{1.0f};             // Size scale for depth effect
+};
+
+/**
  * @brief Game state enumeration
  */
 enum class GameState {
@@ -174,7 +202,14 @@ enum class GameState {
     CRASHED,
     GAME_OVER,
     HIGH_SCORES,
-    ENTER_NAME
+    ENTER_NAME,
+    CONFIRM_QUIT    // Confirmation dialog for quit/restart
+};
+
+// Confirm quit dialog mode
+enum class ConfirmMode {
+    QUIT,           // User pressed Q - asking to quit
+    RESTART         // User pressed R - asking to restart
 };
 
 // ============================================================================
@@ -185,11 +220,15 @@ enum class GameState {
 Lander lander;
 std::vector<TerrainPoint> terrain;
 std::vector<Particle> particles;
+std::vector<Shockwave> shockwaves;  // Explosion shockwave rings
 std::vector<Star> stars;
 std::vector<HighScore> highScores(MAX_HIGH_SCORES);
+std::vector<BackgroundLander> backgroundLanders;  // For title screen animation
 
 // Game state
 GameState gameState = GameState::TITLE_SCREEN;
+GameState previousState = GameState::TITLE_SCREEN;  // State to return to from CONFIRM_QUIT
+ConfirmMode confirmMode = ConfirmMode::QUIT;        // What action the user is confirming
 int score = 0;
 int level = 1;
 int lives = 3;
@@ -202,6 +241,7 @@ bool keys[256] = {false};
 // UI state
 wchar_t playerName[32] = L"";
 int nameLength = 0;
+int stateTimer = 0;  // Timer for state transitions (moved from local static)
 
 // Random number generator
 std::random_device rd;
@@ -230,6 +270,8 @@ void InitGame();
 void InitStars();
 void InitTerrain();
 void InitLander();
+void InitBackgroundLanders();
+void UpdateBackgroundLanders();
 
 // Game loop
 void UpdateGame();
@@ -376,6 +418,89 @@ void InitLander() {
     lander.landed = false;
 }
 
+/**
+ * @brief Initialize background landers for title screen animation
+ */
+void InitBackgroundLanders() {
+    backgroundLanders.clear();
+
+    std::uniform_real_distribution<float> xDist(50.0f, WINDOW_WIDTH - 50.0f);
+    std::uniform_real_distribution<float> yDist(-100.0f, 100.0f);
+    std::uniform_real_distribution<float> scaleDist(0.4f, 0.8f);
+    std::uniform_real_distribution<float> targetYDist(WINDOW_HEIGHT - 120.0f, WINDOW_HEIGHT - 60.0f);
+
+    for (int i = 0; i < 5; i++) {
+        BackgroundLander bl;
+        bl.pos = Vector2(xDist(gen), yDist(gen));
+        bl.vel = Vector2(0.0f, 0.3f);  // Slow descent
+        bl.rotation = 0.0f;
+        bl.targetY = targetYDist(gen);
+        bl.landed = false;
+        bl.thrusterOn = false;
+        bl.landedTimer = 0;
+        bl.scale = scaleDist(gen);
+        backgroundLanders.push_back(bl);
+    }
+}
+
+/**
+ * @brief Update background landers - simple AI landing behavior
+ */
+void UpdateBackgroundLanders() {
+    std::uniform_real_distribution<float> xDist(50.0f, WINDOW_WIDTH - 50.0f);
+    std::uniform_real_distribution<float> yDist(-150.0f, -50.0f);
+    std::uniform_real_distribution<float> scaleDist(0.4f, 0.8f);
+    std::uniform_real_distribution<float> targetYDist(WINDOW_HEIGHT - 120.0f, WINDOW_HEIGHT - 60.0f);
+
+    for (auto& bl : backgroundLanders) {
+        if (bl.landed) {
+            bl.landedTimer++;
+            // After landing for a while, reset and start again
+            if (bl.landedTimer > 300) {  // ~5 seconds
+                bl.pos = Vector2(xDist(gen), yDist(gen));
+                bl.vel = Vector2(0.0f, 0.3f);
+                bl.targetY = targetYDist(gen);
+                bl.landed = false;
+                bl.landedTimer = 0;
+                bl.scale = scaleDist(gen);
+            }
+            continue;
+        }
+
+        // Apply gravity (scaled down for background effect)
+        bl.vel.y += GRAVITY * 0.3f * bl.scale;
+
+        // Simple landing AI - slow down when approaching target
+        float distanceToGround = bl.targetY - bl.pos.y;
+
+        if (distanceToGround < 100.0f && bl.vel.y > 0.5f) {
+            // Fire thrusters to slow down
+            bl.thrusterOn = true;
+            bl.vel.y -= THRUST_POWER * 0.4f * bl.scale;
+        } else if (distanceToGround < 50.0f && bl.vel.y > 0.2f) {
+            // Final approach - very gentle
+            bl.thrusterOn = true;
+            bl.vel.y -= THRUST_POWER * 0.3f * bl.scale;
+        } else {
+            bl.thrusterOn = false;
+        }
+
+        // Clamp velocity
+        bl.vel.y = Clamp(bl.vel.y, -2.0f, 3.0f);
+
+        // Update position
+        bl.pos += bl.vel;
+
+        // Check if landed
+        if (bl.pos.y >= bl.targetY && bl.vel.y >= 0) {
+            bl.pos.y = bl.targetY;
+            bl.vel = Vector2(0.0f, 0.0f);
+            bl.landed = true;
+            bl.thrusterOn = false;
+        }
+    }
+}
+
 // ============================================================================
 // Game Loop Functions
 // ============================================================================
@@ -399,6 +524,7 @@ void UpdateGame() {
                     lander.landed = true;
                     lander.vel = Vector2(0.0f, 0.0f);
                     gameState = GameState::LANDING_SUCCESS;
+                    stateTimer = 0;  // Reset timer for state transition
                     StopSound_Thrust();  // Stop thrust sound on landing
                     PlaySound_Landing();
 
@@ -419,7 +545,9 @@ void UpdateGame() {
                     lander.crashed = true;
                     lander.vel = Vector2(0.0f, 0.0f);
                     gameState = GameState::CRASHED;
+                    stateTimer = 0;  // Reset timer for state transition
                     StopSound_Thrust();  // Stop thrust sound on crash
+                    Sleep(50);  // Brief delay to let audio device stabilize
                     SpawnExplosion(lander.pos);
                     SpawnLanderDebris(lander.pos, lander.rotation);  // Break apart lander
                     PlaySound_Crash();
@@ -432,8 +560,7 @@ void UpdateGame() {
         case GameState::CRASHED:
             UpdateParticles();
 
-            // Auto-advance after delay
-            static int stateTimer = 0;
+            // Auto-advance after delay (stateTimer is global, reset on state entry)
             stateTimer++;
             if (stateTimer > 120) {  // 2 seconds at 60 FPS
                 stateTimer = 0;
@@ -577,67 +704,178 @@ bool CheckLandingPadCollision() {
 // ============================================================================
 
 /**
- * @brief Spawn explosion particles - enhanced with multiple particle types
+ * @brief Spawn classic arcade explosion - dramatic BOOM effect!
+ * Creates a multi-layered explosion with flash, fireball, sparks, and shockwave
  */
 void SpawnExplosion(const Vector2& pos) {
-    std::uniform_real_distribution<> velDist(-5.0f, 5.0f);
-    std::uniform_real_distribution<> fastVelDist(-8.0f, 8.0f);
-    std::uniform_int_distribution<> lifeDist(20, 50);
-    std::uniform_int_distribution<> longLifeDist(40, 80);
-    std::uniform_int_distribution<> typeDist(0, 2);
+    // Random distributions for variety
+    std::uniform_real_distribution<float> angleDist(0.0f, 6.28318f);
+    std::uniform_real_distribution<float> speedDist(2.0f, 12.0f);
+    std::uniform_real_distribution<float> slowSpeedDist(0.5f, 3.0f);
+    std::uniform_real_distribution<float> sparkSpeedDist(8.0f, 18.0f);
+    std::uniform_real_distribution<float> sizeDist(1.0f, 4.0f);
+    std::uniform_int_distribution<int> shortLife(8, 20);
+    std::uniform_int_distribution<int> medLife(25, 50);
+    std::uniform_int_distribution<int> longLife(50, 90);
+    std::uniform_int_distribution<int> fireColorG(80, 200);
+    std::uniform_int_distribution<int> sparkColorR(200, 255);
+    std::uniform_int_distribution<int> sparkColorG(150, 255);
 
-    // Create 150 particles for a more dramatic explosion
-    for (int i = 0; i < 150; i++) {
+    // === LAYER 1: Initial bright flash (the "BOOM" moment) ===
+    for (int i = 0; i < 8; i++) {
         Particle p;
         p.pos = pos;
-        p.type = typeDist(gen);
-
-        // Different particle types have different properties
-        switch (p.type) {
-            case 0:  // Fire/explosion particles (fast, bright, short-lived)
-                p.vel = Vector2(
-                    static_cast<float>(fastVelDist(gen)),
-                    static_cast<float>(fastVelDist(gen)) - 2.0f  // Slight upward bias
-                );
-                p.maxLifetime = lifeDist(gen);
-                p.color = RGB(255, 100 + rand() % 156, 0);  // Orange to yellow
-                break;
-
-            case 1:  // Smoke particles (slower, gray, longer-lived)
-                p.vel = Vector2(
-                    static_cast<float>(velDist(gen)) * 0.5f,
-                    static_cast<float>(velDist(gen)) * 0.5f - 1.0f  // Float upward
-                );
-                p.maxLifetime = longLifeDist(gen);
-                p.color = RGB(100 + rand() % 100, 100 + rand() % 100, 100 + rand() % 100);
-                break;
-
-            case 2:  // Debris particles (medium speed, various colors)
-                p.vel = Vector2(
-                    static_cast<float>(velDist(gen)),
-                    static_cast<float>(velDist(gen))
-                );
-                p.maxLifetime = lifeDist(gen) + 20;
-                int brightness = 150 + rand() % 106;
-                p.color = RGB(brightness, brightness, brightness);
-                break;
-        }
-
+        p.type = 5;  // Flash type
+        float angle = angleDist(gen);
+        float speed = slowSpeedDist(gen);
+        p.vel = Vector2(std::cos(angle) * speed, std::sin(angle) * speed);
+        p.maxLifetime = shortLife(gen);
         p.lifetime = p.maxLifetime;
+        p.color = RGB(255, 255, 200);  // Bright white-yellow flash
+        p.size = 6.0f + sizeDist(gen);
         particles.push_back(p);
     }
+
+    // === LAYER 2: Fireball core (expanding orange-red mass) ===
+    for (int i = 0; i < 60; i++) {
+        Particle p;
+        p.pos = pos;
+        p.type = 0;  // Fire
+        float angle = angleDist(gen);
+        float speed = speedDist(gen);
+        p.vel = Vector2(
+            std::cos(angle) * speed,
+            std::sin(angle) * speed - 1.5f  // Slight upward bias
+        );
+        p.maxLifetime = medLife(gen);
+        p.lifetime = p.maxLifetime;
+        // Fire colors: bright yellow center to dark red edges
+        int g = fireColorG(gen);
+        p.color = RGB(255, g, 0);
+        p.size = sizeDist(gen);
+        particles.push_back(p);
+    }
+
+    // === LAYER 3: Hot sparks (fast streaking particles) ===
+    for (int i = 0; i < 40; i++) {
+        Particle p;
+        p.pos = pos;
+        p.type = 4;  // Spark
+        float angle = angleDist(gen);
+        float speed = sparkSpeedDist(gen);
+        p.vel = Vector2(std::cos(angle) * speed, std::sin(angle) * speed);
+        p.maxLifetime = shortLife(gen) + 10;
+        p.lifetime = p.maxLifetime;
+        // Hot white/yellow sparks
+        p.color = RGB(sparkColorR(gen), sparkColorG(gen), 100);
+        p.size = 1.0f;
+        // Store spark trail direction
+        p.endPos = Vector2(std::cos(angle) * 8.0f, std::sin(angle) * 8.0f);
+        particles.push_back(p);
+    }
+
+    // === LAYER 4: Secondary explosions (delayed fireballs) ===
+    std::uniform_real_distribution<float> offsetDist(-15.0f, 15.0f);
+    for (int i = 0; i < 25; i++) {
+        Particle p;
+        p.pos = Vector2(pos.x + offsetDist(gen), pos.y + offsetDist(gen));
+        p.type = 0;  // Fire
+        float angle = angleDist(gen);
+        float speed = speedDist(gen) * 0.7f;
+        p.vel = Vector2(
+            std::cos(angle) * speed,
+            std::sin(angle) * speed - 2.0f
+        );
+        p.maxLifetime = medLife(gen) + 15;  // Slightly delayed
+        p.lifetime = p.maxLifetime;
+        int g = fireColorG(gen);
+        p.color = RGB(255, g, g / 4);  // More reddish
+        p.size = sizeDist(gen) * 1.5f;
+        particles.push_back(p);
+    }
+
+    // === LAYER 5: Smoke cloud (rising, long-lasting) ===
+    std::uniform_int_distribution<int> grayDist(60, 140);
+    for (int i = 0; i < 35; i++) {
+        Particle p;
+        p.pos = Vector2(pos.x + offsetDist(gen), pos.y + offsetDist(gen));
+        p.type = 1;  // Smoke
+        float angle = angleDist(gen);
+        float speed = slowSpeedDist(gen);
+        p.vel = Vector2(
+            std::cos(angle) * speed * 0.5f,
+            -std::abs(std::sin(angle) * speed) - 0.5f  // Always float up
+        );
+        p.maxLifetime = longLife(gen);
+        p.lifetime = p.maxLifetime;
+        int gray = grayDist(gen);
+        p.color = RGB(gray, gray, gray);
+        p.size = sizeDist(gen) * 2.0f;
+        particles.push_back(p);
+    }
+
+    // === LAYER 6: Metal debris (shrapnel flying outward) ===
+    std::uniform_int_distribution<int> metalDist(150, 220);
+    for (int i = 0; i < 20; i++) {
+        Particle p;
+        p.pos = pos;
+        p.type = 2;  // Debris
+        float angle = angleDist(gen);
+        float speed = speedDist(gen) * 1.2f;
+        p.vel = Vector2(std::cos(angle) * speed, std::sin(angle) * speed);
+        p.maxLifetime = medLife(gen) + 20;
+        p.lifetime = p.maxLifetime;
+        int metal = metalDist(gen);
+        p.color = RGB(metal, metal, metal);
+        p.size = 2.0f;
+        particles.push_back(p);
+    }
+
+    // === SHOCKWAVE RINGS ===
+    // Primary shockwave (fast, large)
+    Shockwave sw1;
+    sw1.pos = pos;
+    sw1.radius = 5.0f;
+    sw1.maxRadius = 80.0f;
+    sw1.expandSpeed = 6.0f;
+    sw1.lifetime = 0;
+    sw1.maxLifetime = 15;
+    sw1.color = RGB(255, 200, 100);
+    shockwaves.push_back(sw1);
+
+    // Secondary shockwave (slower, follows primary)
+    Shockwave sw2;
+    sw2.pos = pos;
+    sw2.radius = 0.0f;
+    sw2.maxRadius = 60.0f;
+    sw2.expandSpeed = 4.0f;
+    sw2.lifetime = 0;
+    sw2.maxLifetime = 20;
+    sw2.color = RGB(255, 150, 50);
+    shockwaves.push_back(sw2);
+
+    // Tertiary ring (dramatic outer edge)
+    Shockwave sw3;
+    sw3.pos = pos;
+    sw3.radius = 0.0f;
+    sw3.maxRadius = 100.0f;
+    sw3.expandSpeed = 8.0f;
+    sw3.lifetime = 0;
+    sw3.maxLifetime = 12;
+    sw3.color = RGB(255, 255, 200);
+    shockwaves.push_back(sw3);
 }
 
 /**
  * @brief Spawn lander debris pieces - visual breakup on crash
  */
 void SpawnLanderDebris(const Vector2& pos, float rotation) {
-    std::uniform_real_distribution<> velDist(-4.0f, 4.0f);
-    std::uniform_real_distribution<> spinDist(-0.2f, 0.2f);
-    std::uniform_int_distribution<> lifeDist(60, 120);
-
-    float cos_r = std::cos(rotation);
-    float sin_r = std::sin(rotation);
+    std::uniform_real_distribution<float> velDist(-4.0f, 4.0f);
+    std::uniform_real_distribution<float> spinDist(-0.2f, 0.2f);
+    std::uniform_real_distribution<float> rotationOffset(-0.5f, 0.5f);
+    std::uniform_real_distribution<float> fullRotation(0.0f, 6.28318f);
+    std::uniform_int_distribution<int> lifeDist(60, 120);
+    std::uniform_int_distribution<int> legLengthDist(10, 14);
 
     // Create debris pieces representing lander structure breaking apart
     // Each piece is a line segment with endpoints
@@ -648,11 +886,11 @@ void SpawnLanderDebris(const Vector2& pos, float rotation) {
         p.type = 3;  // Lander debris
         p.pos = pos;
         p.vel = Vector2(
-            static_cast<float>(velDist(gen)),
-            static_cast<float>(velDist(gen)) - 2.0f  // Initial upward burst
+            velDist(gen),
+            velDist(gen) - 2.0f  // Initial upward burst
         );
-        p.rotation = rotation + (rand() % 100 - 50) * 0.01f;
-        p.rotationSpeed = static_cast<float>(spinDist(gen));
+        p.rotation = rotation + rotationOffset(gen);
+        p.rotationSpeed = spinDist(gen);
         p.maxLifetime = lifeDist(gen);
         p.lifetime = p.maxLifetime;
         p.color = RGB(220, 220, 220);  // Lander color
@@ -674,36 +912,72 @@ void SpawnLanderDebris(const Vector2& pos, float rotation) {
         p.type = 3;  // Lander debris
         p.pos = pos;
         p.vel = Vector2(
-            static_cast<float>(velDist(gen)) * 1.5f,  // Legs fly farther
-            static_cast<float>(velDist(gen))
+            velDist(gen) * 1.5f,  // Legs fly farther
+            velDist(gen)
         );
-        p.rotation = rotation + (rand() % 360) * 0.0174f;  // Random rotation
-        p.rotationSpeed = static_cast<float>(spinDist(gen)) * 2.0f;  // Spin faster
+        p.rotation = rotation + fullRotation(gen);  // Random rotation
+        p.rotationSpeed = spinDist(gen) * 2.0f;  // Spin faster
         p.maxLifetime = lifeDist(gen);
         p.lifetime = p.maxLifetime;
         p.color = RGB(180, 180, 180);  // Slightly darker for legs
-        p.endPos = Vector2(10.0f + rand() % 5, 0.0f);  // Leg length
+        p.endPos = Vector2(static_cast<float>(legLengthDist(gen)), 0.0f);  // Leg length
 
         particles.push_back(p);
     }
 }
 
 /**
- * @brief Update all particles
+ * @brief Update all particles and shockwaves
  */
 void UpdateParticles() {
+    // Update particles
     for (auto it = particles.begin(); it != particles.end();) {
         it->pos += it->vel;
-        it->vel.y += GRAVITY / 2.0f;  // Half gravity for particles
-        it->lifetime--;
 
-        // Update rotation for lander debris
-        if (it->type == 3) {
-            it->rotation += it->rotationSpeed;
+        // Different gravity for different particle types
+        switch (it->type) {
+            case 0:  // Fire - slight upward drift
+                it->vel.y += GRAVITY * 0.3f;
+                it->vel.x *= 0.98f;  // Air resistance
+                it->vel.y *= 0.98f;
+                break;
+            case 1:  // Smoke - floats up
+                it->vel.y -= 0.02f;
+                it->vel.x *= 0.95f;
+                break;
+            case 2:  // Debris - full gravity
+                it->vel.y += GRAVITY * 0.8f;
+                break;
+            case 3:  // Lander debris - gravity with spin
+                it->vel.y += GRAVITY * 0.6f;
+                it->rotation += it->rotationSpeed;
+                break;
+            case 4:  // Sparks - fast with drag
+                it->vel.y += GRAVITY * 0.4f;
+                it->vel.x *= 0.96f;
+                it->vel.y *= 0.96f;
+                break;
+            case 5:  // Flash - expands then fades
+                it->size *= 0.92f;  // Shrink rapidly
+                break;
         }
+
+        it->lifetime--;
 
         if (it->lifetime <= 0) {
             it = particles.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Update shockwaves
+    for (auto it = shockwaves.begin(); it != shockwaves.end();) {
+        it->radius += it->expandSpeed;
+        it->lifetime++;
+
+        if (it->lifetime >= it->maxLifetime || it->radius >= it->maxRadius) {
+            it = shockwaves.erase(it);
         } else {
             ++it;
         }
@@ -741,6 +1015,78 @@ void RenderGame(HDC hdc) {
 
     switch (gameState) {
         case GameState::TITLE_SCREEN: {
+            // Update and draw background landers (behind everything)
+            UpdateBackgroundLanders();
+
+            // Draw simple ground line for background landers
+            HPEN hPenGround = CreatePen(PS_SOLID, 1, RGB(60, 60, 80));
+            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenGround);
+            MoveToEx(hdcMem, 0, WINDOW_HEIGHT - 50, nullptr);
+            LineTo(hdcMem, WINDOW_WIDTH, WINDOW_HEIGHT - 50);
+            SelectObject(hdcMem, hOldPen);
+            DeleteObject(hPenGround);
+
+            // Draw each background lander
+            for (const auto& bl : backgroundLanders) {
+                // Calculate alpha/brightness based on scale (depth)
+                int brightness = static_cast<int>(120 + bl.scale * 100);
+                COLORREF landerColor = RGB(brightness, brightness, brightness);
+
+                HPEN hPenLander = CreatePen(PS_SOLID, static_cast<int>(1 + bl.scale), landerColor);
+                hOldPen = (HPEN)SelectObject(hdcMem, hPenLander);
+
+                float cos_r = std::cos(bl.rotation);
+                float sin_r = std::sin(bl.rotation);
+                float s = bl.scale;
+
+                // Helper to transform points with scale
+                auto transformBgPoint = [&](float x, float y) -> POINT {
+                    POINT pt;
+                    pt.x = static_cast<LONG>(bl.pos.x + (x * cos_r - y * sin_r) * s);
+                    pt.y = static_cast<LONG>(bl.pos.y + (x * sin_r + y * cos_r) * s);
+                    return pt;
+                };
+
+                // Draw body (simplified)
+                POINT body[5];
+                body[0] = transformBgPoint(-8, -4);
+                body[1] = transformBgPoint(8, -4);
+                body[2] = transformBgPoint(8, 4);
+                body[3] = transformBgPoint(-8, 4);
+                body[4] = body[0];
+                Polyline(hdcMem, body, 5);
+
+                // Draw legs
+                POINT leg1Start = transformBgPoint(-8, 4);
+                POINT leg1End = transformBgPoint(-12, 10);
+                MoveToEx(hdcMem, leg1Start.x, leg1Start.y, nullptr);
+                LineTo(hdcMem, leg1End.x, leg1End.y);
+
+                POINT leg2Start = transformBgPoint(8, 4);
+                POINT leg2End = transformBgPoint(12, 10);
+                MoveToEx(hdcMem, leg2Start.x, leg2Start.y, nullptr);
+                LineTo(hdcMem, leg2End.x, leg2End.y);
+
+                // Draw thruster flame if active
+                if (bl.thrusterOn) {
+                    HPEN hPenFlame = CreatePen(PS_SOLID, static_cast<int>(2 * s), RGB(255, 150, 50));
+                    SelectObject(hdcMem, hPenFlame);
+
+                    static std::uniform_int_distribution<int> bgFlameDist(0, 3);
+                    int flameLen = static_cast<int>((8 + bgFlameDist(gen)) * s);
+                    POINT flameStart = transformBgPoint(0, 4);
+                    POINT flameEnd = transformBgPoint(0, 4 + flameLen);
+                    MoveToEx(hdcMem, flameStart.x, flameStart.y, nullptr);
+                    LineTo(hdcMem, flameEnd.x, flameEnd.y);
+
+                    DeleteObject(hPenFlame);
+                    SelectObject(hdcMem, hPenLander);
+                }
+
+                SelectObject(hdcMem, hOldPen);
+                DeleteObject(hPenLander);
+            }
+
             // Title
             SetTextColor(hdcMem, RGB(255, 255, 255));
             SetBkMode(hdcMem, TRANSPARENT);
@@ -792,7 +1138,7 @@ void RenderGame(HDC hdc) {
                 L"Land gently on the green landing pad",
                 L"Watch your fuel and velocity!",
                 L"",
-                L"Press SPACE to start | Press H for high scores"
+                L"SPACE to start | H for high scores | Q to quit"
             };
 
             int y = 280;
@@ -862,6 +1208,29 @@ void RenderGame(HDC hdc) {
             SelectObject(hdcMem, hOldPen);
             DeleteObject(hPenTerrain);
 
+            // Draw shockwave rings FIRST (behind particles)
+            for (const auto& sw : shockwaves) {
+                float alpha = 1.0f - (static_cast<float>(sw.lifetime) / sw.maxLifetime);
+                int r = static_cast<int>(GetRValue(sw.color) * alpha);
+                int g = static_cast<int>(GetGValue(sw.color) * alpha);
+                int b = static_cast<int>(GetBValue(sw.color) * alpha);
+
+                // Draw expanding ring
+                int thickness = static_cast<int>(3.0f * alpha);
+                if (thickness < 1) thickness = 1;
+                HPEN hPenRing = CreatePen(PS_SOLID, thickness, RGB(r, g, b));
+                HPEN hOldPenRing = (HPEN)SelectObject(hdcMem, hPenRing);
+                SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
+
+                int cx = static_cast<int>(sw.pos.x);
+                int cy = static_cast<int>(sw.pos.y);
+                int rad = static_cast<int>(sw.radius);
+                Ellipse(hdcMem, cx - rad, cy - rad, cx + rad, cy + rad);
+
+                SelectObject(hdcMem, hOldPenRing);
+                DeleteObject(hPenRing);
+            }
+
             // Draw particles with enhanced rendering
             for (const auto& p : particles) {
                 float alpha = static_cast<float>(p.lifetime) / p.maxLifetime;
@@ -872,33 +1241,117 @@ void RenderGame(HDC hdc) {
                 int b = static_cast<int>(GetBValue(p.color) * alpha);
 
                 COLORREF fadedColor = RGB(r, g, b);
+                int px = static_cast<int>(p.pos.x);
+                int py = static_cast<int>(p.pos.y);
 
-                if (p.type == 3) {
-                    // Lander debris - draw as rotating line segments
-                    HPEN hPenDebris = CreatePen(PS_SOLID, 2, fadedColor);
-                    HPEN hOldPenDebris = (HPEN)SelectObject(hdcMem, hPenDebris);
-
-                    // Calculate rotated endpoints
-                    float cos_r = std::cos(p.rotation);
-                    float sin_r = std::sin(p.rotation);
-
-                    int x1 = static_cast<int>(p.pos.x);
-                    int y1 = static_cast<int>(p.pos.y);
-                    int x2 = static_cast<int>(p.pos.x + (p.endPos.x * cos_r - p.endPos.y * sin_r));
-                    int y2 = static_cast<int>(p.pos.y + (p.endPos.x * sin_r + p.endPos.y * cos_r));
-
-                    MoveToEx(hdcMem, x1, y1, nullptr);
-                    LineTo(hdcMem, x2, y2);
-
-                    SelectObject(hdcMem, hOldPenDebris);
-                    DeleteObject(hPenDebris);
-                } else {
-                    // Regular particles (fire, smoke, debris)
-                    int size = (p.type == 2) ? 2 : 1;  // Debris is larger
-                    for (int dx = 0; dx < size; dx++) {
-                        for (int dy = 0; dy < size; dy++) {
-                            SetPixel(hdcMem, static_cast<int>(p.pos.x) + dx, static_cast<int>(p.pos.y) + dy, fadedColor);
+                switch (p.type) {
+                    case 0:  // Fire - draw as glowing blob
+                    {
+                        int size = static_cast<int>(p.size * alpha);
+                        if (size < 1) size = 1;
+                        // Draw core
+                        for (int dx = -size; dx <= size; dx++) {
+                            for (int dy = -size; dy <= size; dy++) {
+                                if (dx*dx + dy*dy <= size*size) {
+                                    SetPixel(hdcMem, px + dx, py + dy, fadedColor);
+                                }
+                            }
                         }
+                        break;
+                    }
+
+                    case 1:  // Smoke - larger, softer blob
+                    {
+                        int size = static_cast<int>(p.size * (0.5f + alpha * 0.5f));
+                        if (size < 1) size = 1;
+                        for (int dx = -size; dx <= size; dx++) {
+                            for (int dy = -size; dy <= size; dy++) {
+                                if (dx*dx + dy*dy <= size*size) {
+                                    SetPixel(hdcMem, px + dx, py + dy, fadedColor);
+                                }
+                            }
+                        }
+                        break;
+                    }
+
+                    case 2:  // Metal debris - small squares
+                    {
+                        int size = static_cast<int>(p.size);
+                        for (int dx = 0; dx < size; dx++) {
+                            for (int dy = 0; dy < size; dy++) {
+                                SetPixel(hdcMem, px + dx, py + dy, fadedColor);
+                            }
+                        }
+                        break;
+                    }
+
+                    case 3:  // Lander debris - rotating line segments
+                    {
+                        HPEN hPenDebris = CreatePen(PS_SOLID, 2, fadedColor);
+                        HPEN hOldPenDebris = (HPEN)SelectObject(hdcMem, hPenDebris);
+
+                        float cos_r = std::cos(p.rotation);
+                        float sin_r = std::sin(p.rotation);
+
+                        int x1 = px;
+                        int y1 = py;
+                        int x2 = static_cast<int>(p.pos.x + (p.endPos.x * cos_r - p.endPos.y * sin_r));
+                        int y2 = static_cast<int>(p.pos.y + (p.endPos.x * sin_r + p.endPos.y * cos_r));
+
+                        MoveToEx(hdcMem, x1, y1, nullptr);
+                        LineTo(hdcMem, x2, y2);
+
+                        SelectObject(hdcMem, hOldPenDebris);
+                        DeleteObject(hPenDebris);
+                        break;
+                    }
+
+                    case 4:  // Sparks - streaking lines
+                    {
+                        HPEN hPenSpark = CreatePen(PS_SOLID, 1, fadedColor);
+                        HPEN hOldPenSpark = (HPEN)SelectObject(hdcMem, hPenSpark);
+
+                        // Draw spark with trail
+                        int trailLen = static_cast<int>(p.vel.length() * 0.5f);
+                        if (trailLen < 2) trailLen = 2;
+                        int tx = static_cast<int>(p.pos.x - p.vel.x * 0.3f);
+                        int ty = static_cast<int>(p.pos.y - p.vel.y * 0.3f);
+
+                        MoveToEx(hdcMem, tx, ty, nullptr);
+                        LineTo(hdcMem, px, py);
+
+                        // Bright tip
+                        SetPixel(hdcMem, px, py, RGB(255, 255, 200));
+
+                        SelectObject(hdcMem, hOldPenSpark);
+                        DeleteObject(hPenSpark);
+                        break;
+                    }
+
+                    case 5:  // Flash - bright expanding glow
+                    {
+                        int size = static_cast<int>(p.size);
+                        if (size < 1) size = 1;
+
+                        // Draw bright center
+                        COLORREF brightColor = RGB(
+                            std::min(255, r + 100),
+                            std::min(255, g + 100),
+                            std::min(255, b + 50)
+                        );
+
+                        for (int dx = -size; dx <= size; dx++) {
+                            for (int dy = -size; dy <= size; dy++) {
+                                float dist = std::sqrt(static_cast<float>(dx*dx + dy*dy));
+                                if (dist <= size) {
+                                    // Brighter in center
+                                    float intensity = 1.0f - (dist / size);
+                                    COLORREF c = (intensity > 0.5f) ? brightColor : fadedColor;
+                                    SetPixel(hdcMem, px + dx, py + dy, c);
+                                }
+                            }
+                        }
+                        break;
                     }
                 }
             }
@@ -977,7 +1430,8 @@ void RenderGame(HDC hdc) {
                     HPEN hPenFlame = CreatePen(PS_SOLID, 3, RGB(255, 200, 0));
                     SelectObject(hdcMem, hPenFlame);
 
-                    int flameLength = 12 + (rand() % 4);  // Flickering flame
+                    static std::uniform_int_distribution<int> flameDist(0, 3);
+                    int flameLength = 12 + flameDist(gen);  // Flickering flame
                     POINT flameStart = transformPoint(0, 4);
                     POINT flameEnd = transformPoint(0, 4 + flameLength);
 
@@ -1243,6 +1697,74 @@ void RenderGame(HDC hdc) {
             break;
         }
 
+        case GameState::CONFIRM_QUIT: {
+            // Draw semi-transparent overlay
+            for (int oy = 0; oy < WINDOW_HEIGHT; oy += 2) {
+                for (int ox = 0; ox < WINDOW_WIDTH; ox += 2) {
+                    SetPixel(hdcMem, ox, oy, RGB(0, 0, 0));
+                }
+            }
+
+            SetTextColor(hdcMem, RGB(255, 255, 255));
+            SetBkMode(hdcMem, TRANSPARENT);
+
+            // Draw dialog box background
+            RECT dialogRect = {WINDOW_WIDTH / 2 - 180, WINDOW_HEIGHT / 2 - 80,
+                              WINDOW_WIDTH / 2 + 180, WINDOW_HEIGHT / 2 + 80};
+            HBRUSH hBrushDialog = CreateSolidBrush(RGB(20, 20, 40));
+            FillRect(hdcMem, &dialogRect, hBrushDialog);
+            DeleteObject(hBrushDialog);
+
+            // Draw border
+            HPEN hPenBorder = CreatePen(PS_SOLID, 3, RGB(255, 200, 0));
+            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenBorder);
+            SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
+            Rectangle(hdcMem, dialogRect.left, dialogRect.top, dialogRect.right, dialogRect.bottom);
+            SelectObject(hdcMem, hOldPen);
+            DeleteObject(hPenBorder);
+
+            // Title
+            HFONT hFont = CreateFont(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
+            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
+
+            SetTextColor(hdcMem, RGB(255, 200, 0));
+            RECT titleRect = {dialogRect.left, dialogRect.top + 15, dialogRect.right, dialogRect.top + 50};
+            if (confirmMode == ConfirmMode::QUIT) {
+                DrawText(hdcMem, L"QUIT GAME?", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            } else {
+                DrawText(hdcMem, L"RESTART GAME?", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+
+            SelectObject(hdcMem, hOldFont);
+            DeleteObject(hFont);
+
+            // Options
+            hFont = CreateFont(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Arial");
+            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
+
+            SetTextColor(hdcMem, RGB(255, 255, 255));
+            RECT option1Rect = {dialogRect.left, dialogRect.top + 60, dialogRect.right, dialogRect.top + 85};
+            RECT option2Rect = {dialogRect.left, dialogRect.top + 90, dialogRect.right, dialogRect.top + 115};
+            RECT option3Rect = {dialogRect.left, dialogRect.top + 120, dialogRect.right, dialogRect.top + 145};
+
+            if (confirmMode == ConfirmMode::QUIT) {
+                DrawText(hdcMem, L"Q - Quit to Desktop", -1, &option1Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawText(hdcMem, L"R - Restart Game", -1, &option2Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            } else {
+                DrawText(hdcMem, L"R - Restart Game", -1, &option1Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawText(hdcMem, L"Q - Quit to Desktop", -1, &option2Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+            DrawText(hdcMem, L"ESC - Cancel", -1, &option3Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            SelectObject(hdcMem, hOldFont);
+            DeleteObject(hFont);
+            break;
+        }
+
         default:
             break;
     }
@@ -1494,42 +2016,92 @@ void StopSound_Thrust() {
 }
 
 /**
- * @brief Generate realistic explosion sound - DEEP BOOM with massive bass
+ * @brief Generate EPIC arcade explosion sound - Classic KABOOM!
+ * Inspired by Asteroids, Defender, and Robotron explosions
  */
 void GenerateExplosionSound(short* buffer, int samples) {
+    static float filterState1 = 0.0f;
+    static float filterState2 = 0.0f;
+
     for (int i = 0; i < samples; i++) {
         float t = static_cast<float>(i) / samples;
 
         // Generate white noise for explosion texture
         float noise = static_cast<float>(rand() - RAND_MAX / 2) / (RAND_MAX / 2);
 
-        // Exponential decay envelope
-        float envelope = std::exp(-t * 4.0f);
-
-        // DEEP BASS BOOM - Multiple sub-bass frequencies layered
-        float deepBoom1 = std::sin(t * 3.14159f * 15.0f) * envelope * 0.8f;   // 15 Hz - ultra deep
-        float deepBoom2 = std::sin(t * 3.14159f * 30.0f) * envelope * 0.6f;   // 30 Hz - deep bass
-        float deepBoom3 = std::sin(t * 3.14159f * 50.0f) * envelope * 0.4f;   // 50 Hz - bass rumble
-
-        // Initial WHUMP (concentrated in first 20%)
-        float whump = 0.0f;
-        if (t < 0.2f) {
-            float whumpEnv = std::exp(-t * 20.0f);
-            whump = std::sin(t * 3.14159f * 20.0f) * whumpEnv * 1.5f;  // Massive initial impact
+        // === PHASE 1: INITIAL IMPACT (0-5%) - The "KA-" ===
+        float impact = 0.0f;
+        if (t < 0.05f) {
+            float impactT = t / 0.05f;
+            // Massive square wave burst
+            float squareWave = (std::sin(impactT * 6.28318f * 200.0f) > 0.0f) ? 1.0f : -1.0f;
+            // Add some harmonics for crunch
+            squareWave += (std::sin(impactT * 6.28318f * 400.0f) > 0.0f) ? 0.5f : -0.5f;
+            impact = squareWave * (1.0f - impactT) * 2.0f;
         }
 
-        // Low-frequency rumble (filtered noise for texture)
-        static float filterState = 0.0f;
-        filterState = filterState * 0.95f + noise * 0.05f;  // Heavy low-pass filter
-        float rumble = filterState * envelope * 0.7f;
+        // === PHASE 2: PRIMARY BOOM (5-40%) - The "-BOOM" ===
+        float boom = 0.0f;
+        if (t >= 0.05f && t < 0.4f) {
+            float boomT = (t - 0.05f) / 0.35f;
+            float boomEnv = std::exp(-boomT * 4.0f);
 
-        // Mid-range explosion body (gives it substance)
-        float body = std::sin(t * 3.14159f * 80.0f) * envelope * 0.3f;
+            // Deep descending sweep (the signature arcade sound)
+            float startFreq = 600.0f;
+            float endFreq = 30.0f;
+            float freq = startFreq * std::pow(endFreq / startFreq, boomT);
+            boom = std::sin(i * freq * 6.28318f / 22050.0f) * boomEnv * 1.5f;
 
-        // Combine all elements for MASSIVE explosion
-        float sample = (whump + deepBoom1 + deepBoom2 + deepBoom3 + rumble + body) * 32000.0f;
+            // Add second harmonic for richness
+            float freq2 = freq * 1.5f;
+            boom += std::sin(i * freq2 * 6.28318f / 22050.0f) * boomEnv * 0.5f;
+        }
 
-        // Clamp to 16-bit range
+        // === PHASE 3: SECONDARY EXPLOSIONS (10-60%) ===
+        float secondary = 0.0f;
+        if (t >= 0.1f && t < 0.6f) {
+            float secT = (t - 0.1f) / 0.5f;
+
+            // Multiple smaller "pops" at different rates
+            float pop1 = std::sin(i * (400.0f - secT * 300.0f) * 6.28318f / 22050.0f);
+            float pop2 = std::sin(i * (300.0f - secT * 200.0f) * 6.28318f / 22050.0f);
+
+            // Gated bursts for that classic arcade crackle
+            int burstGate = (i / 300) % 5;
+            float gate = (burstGate < 3) ? 1.0f : 0.3f;
+
+            secondary = (pop1 * 0.4f + pop2 * 0.3f) * std::exp(-secT * 3.0f) * gate;
+        }
+
+        // === PHASE 4: RUMBLING DECAY (20-100%) ===
+        float rumble = 0.0f;
+        if (t >= 0.2f) {
+            float rumbleT = (t - 0.2f) / 0.8f;
+            float rumbleEnv = std::exp(-rumbleT * 2.5f);
+
+            // Low frequency rumble
+            float rumbleFreq = 40.0f - rumbleT * 20.0f;
+            rumble = std::sin(i * rumbleFreq * 6.28318f / 22050.0f) * rumbleEnv * 0.8f;
+
+            // Add filtered noise for debris/crackle texture
+            filterState1 = filterState1 * 0.85f + noise * 0.15f;
+            rumble += filterState1 * rumbleEnv * 0.6f;
+        }
+
+        // === PHASE 5: NOISE TEXTURE (throughout) ===
+        // Filtered noise that decays over time
+        float noiseEnv = std::exp(-t * 4.0f);
+        filterState2 = filterState2 * 0.7f + noise * 0.3f;
+        float textureNoise = filterState2 * noiseEnv * 0.4f;
+
+        // === FINAL MIX ===
+        float sample = (impact * 1.2f + boom + secondary + rumble + textureNoise) * 28000.0f;
+
+        // Soft clipping for that warm arcade sound
+        if (sample > 30000.0f) sample = 30000.0f + (sample - 30000.0f) * 0.3f;
+        if (sample < -30000.0f) sample = -30000.0f + (sample + 30000.0f) * 0.3f;
+
+        // Hard clamp
         if (sample > 32767.0f) sample = 32767.0f;
         if (sample < -32768.0f) sample = -32768.0f;
 
@@ -1583,45 +2155,55 @@ void PlaySound_MenuSelect() {
 }
 
 /**
- * @brief Thread function for fast 3-second retro intro sound
- * Classic space game intro with lunar lander theme - FAST!
+ * @brief Thread function for space frontier intro sound
+ * Cinematic space western theme - mysterious, epic, adventurous!
  */
 DWORD WINAPI IntroSoundThreadProc(LPVOID lpParam) {
     (void)lpParam;
 
-    // FAST 3-SECOND RETRO INTRO - Lunar Lander Theme!
-    // Part 1: Dramatic space opening (0-0.85 seconds)
-    Beep(196, 210);   // G3 - Deep space bass
-    Beep(220, 140);   // A3
-    Beep(247, 140);   // B3
-    Beep(262, 280);   // C4 - Building tension
-    Sleep(70);
+    // SPACE FRONTIER THEME - Cinematic & Mysterious (~4 seconds)
 
-    // Part 2: Ascending rocket launch sequence (0.85-1.6 seconds)
-    Beep(294, 105);   // D4 - Faster now!
-    Beep(330, 105);   // E4
-    Beep(349, 105);   // F4
-    Beep(392, 105);   // G4
-    Beep(440, 140);   // A4 - Getting higher!
-    Beep(494, 140);   // B4
-    Sleep(35);
+    // Part 1: Deep space atmosphere - mysterious opening
+    Beep(110, 400);   // A2 - Deep rumbling bass
+    Sleep(50);
+    Beep(165, 300);   // E3 - Rising from the void
+    Beep(220, 250);   // A3 - Establishing tone
+    Sleep(100);
 
-    // Part 3: Triumphant lunar arrival (1.6-3.0 seconds)
-    Beep(523, 175);   // C5 - Peak!
-    Sleep(35);
-    Beep(523, 105);   // C5 - Echo
-    Beep(440, 105);   // A4
-    Beep(523, 105);   // C5
-    Beep(587, 280);   // D5 - Victory!
-    Sleep(70);
-    Beep(523, 210);   // C5 - Final heroic note
-    Beep(392, 280);   // G4 - Settling on the moon
+    // Part 2: The frontier call - western-inspired melody
+    Beep(330, 200);   // E4 - First frontier note
+    Beep(294, 150);   // D4 - Drop
+    Beep(330, 200);   // E4 - Rise
+    Beep(440, 350);   // A4 - The call!
+    Sleep(80);
+
+    // Part 3: Space adventure motif - heroic but lonely
+    Beep(392, 180);   // G4
+    Beep(330, 180);   // E4
+    Beep(294, 180);   // D4
+    Beep(262, 300);   // C4 - Settling
+    Sleep(60);
+
+    // Part 4: Epic conclusion - the final frontier
+    Beep(196, 150);   // G3 - Bass foundation
+    Beep(262, 150);   // C4 - Building
+    Beep(330, 150);   // E4
+    Beep(392, 200);   // G4
+    Beep(523, 400);   // C5 - Triumphant peak!
+    Sleep(100);
+
+    // Part 5: Mysterious echo - into the unknown
+    Beep(392, 250);   // G4 - Echo 1
+    Sleep(50);
+    Beep(330, 250);   // E4 - Echo 2
+    Sleep(50);
+    Beep(262, 400);   // C4 - Final resonance - the journey begins
 
     return 0;
 }
 
 /**
- * @brief Play fast 3-second retro intro sound in background
+ * @brief Play space frontier intro sound in background
  */
 void PlaySound_Intro() {
     // Play in background thread so it doesn't block startup
@@ -1663,8 +2245,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_CREATE:
             LoadHighScores();
             InitStars();
+            InitBackgroundLanders();  // Initialize title screen animation
             SetTimer(hwnd, 1, TARGET_FRAME_TIME, nullptr);
-            PlaySound_Intro();  // Play funny intro sound on startup
+            PlaySound_Intro();  // Play space frontier intro sound
             return 0;
 
         case WM_DESTROY:
@@ -1703,11 +2286,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                     } else if (wParam == 'H') {
                         gameState = GameState::HIGH_SCORES;
                         PlaySound_MenuSelect();
+                    } else if (wParam == 'Q') {
+                        PostQuitMessage(0);  // Quit directly from title screen
                     }
                     break;
 
                 case GameState::GAME_OVER:
                     if (wParam == VK_SPACE) {
+                        InitGame();
+                        PlaySound_MenuSelect();
+                    } else if (wParam == 'Q') {
+                        PostQuitMessage(0);  // Quit from game over
+                    } else if (wParam == 'R') {
                         InitGame();
                         PlaySound_MenuSelect();
                     }
@@ -1716,7 +2306,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 case GameState::HIGH_SCORES:
                     if (wParam == VK_ESCAPE) {
                         gameState = GameState::TITLE_SCREEN;
+                        InitBackgroundLanders();  // Reset animation
                         PlaySound_MenuSelect();
+                    } else if (wParam == 'Q') {
+                        PostQuitMessage(0);  // Quit from high scores
                     }
                     break;
 
@@ -1734,14 +2327,53 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 case GameState::PLAYING:
                     if (wParam == VK_ESCAPE) {
                         gameState = GameState::TITLE_SCREEN;
+                        InitBackgroundLanders();  // Reset animation
+                        StopSound_Thrust();  // Stop any thrust sound
                     } else if (wParam == 'P') {
                         gameState = GameState::PAUSED;
+                    } else if (wParam == 'Q') {
+                        previousState = gameState;
+                        confirmMode = ConfirmMode::QUIT;
+                        gameState = GameState::CONFIRM_QUIT;
+                        StopSound_Thrust();
+                        PlaySound_MenuSelect();
+                    } else if (wParam == 'R') {
+                        previousState = gameState;
+                        confirmMode = ConfirmMode::RESTART;
+                        gameState = GameState::CONFIRM_QUIT;
+                        StopSound_Thrust();
+                        PlaySound_MenuSelect();
                     }
                     break;
 
                 case GameState::PAUSED:
                     if (wParam == 'P' || wParam == VK_ESCAPE) {
                         gameState = GameState::PLAYING;
+                    } else if (wParam == 'Q') {
+                        previousState = gameState;
+                        confirmMode = ConfirmMode::QUIT;
+                        gameState = GameState::CONFIRM_QUIT;
+                        PlaySound_MenuSelect();
+                    } else if (wParam == 'R') {
+                        previousState = gameState;
+                        confirmMode = ConfirmMode::RESTART;
+                        gameState = GameState::CONFIRM_QUIT;
+                        PlaySound_MenuSelect();
+                    }
+                    break;
+
+                case GameState::CONFIRM_QUIT:
+                    if (wParam == VK_ESCAPE) {
+                        // Cancel - return to previous state
+                        gameState = previousState;
+                        PlaySound_MenuSelect();
+                    } else if (wParam == 'Q') {
+                        // Quit to desktop
+                        PostQuitMessage(0);
+                    } else if (wParam == 'R') {
+                        // Restart the game
+                        InitGame();
+                        PlaySound_MenuSelect();
                     }
                     break;
 

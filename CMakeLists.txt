@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-# Read version from VERSION file
+# Read version from VERSION file (single source of truth)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" VERSION_STRING)
 string(STRIP "${VERSION_STRING}" VERSION_STRING)
 
@@ -16,17 +16,24 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Generate version header
+# Generate version header from template
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/version.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/version.h"
     @ONLY
 )
 
-# Add executable with Windows resource file
+# Generate Windows resource file from template (uses same version)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/lander.rc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/lander.rc"
+    @ONLY
+)
+
+# Add executable with generated resource file
 add_executable(lander WIN32
     lander.cpp
-    lander.rc
+    "${CMAKE_CURRENT_BINARY_DIR}/lander.rc"
 )
 
 # Include generated headers

@@ -66,14 +66,15 @@ if %ERRORLEVEL%==0 (
     echo [CMake] Build failed, trying direct compilation...
 )
 
-:: Generate version.h manually
-echo [Build] Generating version header...
+:: Parse version into components
+echo [Build] Generating version files...
 for /f "tokens=1,2,3 delims=." %%a in ("%VERSION_OVERRIDE%") do (
     set "VER_MAJOR=%%a"
     set "VER_MINOR=%%b"
     set "VER_PATCH=%%c"
 )
 
+:: Generate version.h from template pattern
 (
 echo #ifndef VERSION_H
 echo #define VERSION_H
@@ -88,11 +89,62 @@ echo.
 echo #endif // VERSION_H
 ) > build\version.h
 
+:: Generate lander.rc with correct version (single source of truth)
+(
+echo #include ^<windows.h^>
+echo.
+echo #ifdef RC_INVOKED
+echo.
+echo #define VER_FILEVERSION             %VER_MAJOR%,%VER_MINOR%,%VER_PATCH%,0
+echo #define VER_FILEVERSION_STR         "%VERSION_OVERRIDE%.0\0"
+echo.
+echo #define VER_PRODUCTVERSION          %VER_MAJOR%,%VER_MINOR%,%VER_PATCH%,0
+echo #define VER_PRODUCTVERSION_STR      "%VERSION_OVERRIDE%\0"
+echo.
+echo #define VER_COMPANYNAME_STR         "Todd Dube"
+echo #define VER_FILEDESCRIPTION_STR     "Classic Lunar Lander Game"
+echo #define VER_INTERNALNAME_STR        "lander"
+echo #define VER_LEGALCOPYRIGHT_STR      "Copyright (c) 2025 Todd Dube"
+echo #define VER_ORIGINALFILENAME_STR    "lander.exe"
+echo #define VER_PRODUCTNAME_STR         "Lunar Lander"
+echo.
+echo VS_VERSION_INFO VERSIONINFO
+echo FILEVERSION     VER_FILEVERSION
+echo PRODUCTVERSION  VER_PRODUCTVERSION
+echo FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+echo FILEFLAGS       0
+echo FILEOS          VOS__WINDOWS32
+echo FILETYPE        VFT_APP
+echo FILESUBTYPE     VFT2_UNKNOWN
+echo BEGIN
+echo     BLOCK "StringFileInfo"
+echo     BEGIN
+echo         BLOCK "040904B0"
+echo         BEGIN
+echo             VALUE "CompanyName",      VER_COMPANYNAME_STR
+echo             VALUE "FileDescription",  VER_FILEDESCRIPTION_STR
+echo             VALUE "FileVersion",      VER_FILEVERSION_STR
+echo             VALUE "InternalName",     VER_INTERNALNAME_STR
+echo             VALUE "LegalCopyright",   VER_LEGALCOPYRIGHT_STR
+echo             VALUE "OriginalFilename", VER_ORIGINALFILENAME_STR
+echo             VALUE "ProductName",      VER_PRODUCTNAME_STR
+echo             VALUE "ProductVersion",   VER_PRODUCTVERSION_STR
+echo         END
+echo     END
+echo     BLOCK "VarFileInfo"
+echo     BEGIN
+echo         VALUE "Translation", 0x409, 1200
+echo     END
+echo END
+echo.
+echo #endif
+) > build\lander.rc
+
 :: Compile resource file
 where rc.exe >nul 2>&1
 if %ERRORLEVEL%==0 (
     echo [Build] Compiling resources...
-    rc.exe /fo build\lander.res lander.rc
+    rc.exe /fo build\lander.res build\lander.rc
 )
 
 :: Try MSVC (cl.exe)
