@@ -496,3 +496,39 @@ Targeting macOS 14+ (Sonoma, 2023) is reasonable and gives access to all modern 
 
 ### GitHub Actions CI
 The existing release workflow (`release.yml`) runs on `windows-latest`. Add a parallel `macos-latest` job that builds with `clang++` or CMake and produces a `.app` bundle or `.dmg`.
+
+---
+
+## Implementation Status
+
+### Phase 1: Foundation — COMPLETE
+
+All Phase 1 changes have been implemented in `lander.cpp` on the `phase1-foundation` branch:
+
+| Task | Status | Details |
+|---|---|---|
+| String migration (`wchar_t` -> `char`) | Done | ~60 locations converted. All `L""` literals, `StringCchPrintf`, `StringCchCopy`, `std::wofstream`/`wifstream` replaced with `char`-based equivalents. GDI calls switched to explicit `A`-suffix variants (`TextOutA`, `DrawTextA`, `CreateFontA`, `RegisterClassA`, `CreateWindowExA`, `DefWindowProcA`, `GetTextExtentPoint32A`). |
+| Threading migration | Done | `CreateThread`/`WaitForSingleObject`/`CloseHandle` replaced with `std::thread`/`.join()`. `Sleep()` replaced with `std::this_thread::sleep_for()`. `volatile bool` replaced with `std::atomic<bool>`. `ZeroMemory` replaced with `std::memset`. |
+| PAL types defined | Done | `PlatColor` type (`uint32_t`, stored as `0x00RRGGBB`), `MakeColor`/`ColorR`/`ColorG`/`ColorB` helpers, `PlatColorToNative`/`NativeToPlatColor` conversion functions, portable `POINT` struct for non-Windows. |
+| `COLORREF` -> `PlatColor` in structs | Done | `Particle::color` and `Shockwave::color` changed from `COLORREF` to `PlatColor`. |
+| UNICODE/strsafe.h removal | Done | `#define UNICODE`/`_UNICODE` removed, `<strsafe.h>` removed, `<windows.h>` wrapped in `#ifdef _WIN32`. |
+| New includes added | Done | `<thread>`, `<atomic>`, `<chrono>`, `<cstring>`, `<cstdio>`, `<cstdint>`. |
+
+### Phase 2: Abstraction — COMPLETE
+
+All Phase 2 changes have been implemented in `lander.cpp` on the `phase1-foundation` branch:
+
+| Task | Status | Details |
+|---|---|---|
+| PAL drawing interface defined | Done | `PlatContext` (opaque struct), `PlatTextAlign` enum, 14 PAL function signatures declared: `PlatBeginFrame`, `PlatEndFrame`, `PlatClear`, `PlatDrawLine`, `PlatDrawPolyline`, `PlatDrawPolygonFilled`, `PlatDrawEllipseOutline`, `PlatDrawRect`, `PlatDrawRectOutline`, `PlatDrawPixel`, `PlatDrawText`, `PlatDrawTextXY`, `PlatMeasureTextWidth`. |
+| Windows PAL implementation | Done | Full `#ifdef _WIN32` implementation wrapping GDI calls. `PlatContext` struct wraps `HDC`/`HBITMAP`. Each PAL function manages its own GDI object lifecycle (create/select/use/restore/delete). `PlatInitContext` handles double-buffer DC creation. |
+| RenderGame refactored to use PAL | Done | All ~870 lines of `RenderGame()` converted from direct GDI calls to PAL function calls. Function signature changed from `void RenderGame(HDC hdc)` to `void RenderGame(PlatContext* ctx)`. No direct GDI calls remain in rendering code. |
+| WindowProc WM_PAINT updated | Done | Paint handler now calls `PlatInitContext(hdc)` -> `PlatBeginFrame()` -> `RenderGame(ctx)` -> `PlatEndFrame(ctx, hdc)`. |
+
+### Phase 3: macOS Implementation — NOT STARTED
+
+Remaining work: Cocoa window/event loop, Core Graphics PAL implementation, AudioToolbox sound.
+
+### Phase 4: Build & Polish — NOT STARTED
+
+Remaining work: CMakeLists.txt cross-platform update, `build.sh`, `Info.plist.in`, CI/CD updates.

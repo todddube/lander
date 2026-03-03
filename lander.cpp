@@ -74,6 +74,45 @@ struct POINT { long x; long y; };
 #endif
 
 // ============================================================================
+// Platform Abstraction Layer (PAL) — Drawing Interface
+// ============================================================================
+
+// Opaque drawing context — wraps platform-specific graphics state
+struct PlatContext;
+
+// Text alignment options
+enum class PlatTextAlign {
+    LEFT,
+    CENTER
+};
+
+// Frame management (double buffering)
+PlatContext* PlatBeginFrame();
+void PlatEndFrame(PlatContext* ctx, void* nativeTarget);
+
+// Drawing primitives
+void PlatClear(PlatContext* ctx, PlatColor color);
+void PlatDrawLine(PlatContext* ctx, int x1, int y1, int x2, int y2, PlatColor color, int width = 1);
+void PlatDrawPolyline(PlatContext* ctx, const POINT* pts, int count, PlatColor color, int width = 1);
+void PlatDrawPolygonFilled(PlatContext* ctx, const POINT* pts, int count,
+                           PlatColor fillColor, PlatColor outlineColor, int outlineWidth = 1);
+void PlatDrawEllipseOutline(PlatContext* ctx, int cx, int cy, int rx, int ry,
+                            PlatColor color, int width = 1);
+void PlatDrawRect(PlatContext* ctx, int x, int y, int w, int h, PlatColor fillColor);
+void PlatDrawRectOutline(PlatContext* ctx, int x, int y, int w, int h,
+                         PlatColor color, int width = 1);
+void PlatDrawPixel(PlatContext* ctx, int x, int y, PlatColor color);
+
+// Text rendering
+void PlatDrawText(PlatContext* ctx, const char* text, int x, int y, int w, int h,
+                  PlatColor color, int fontSize, bool bold, const char* fontFamily,
+                  PlatTextAlign align = PlatTextAlign::CENTER);
+void PlatDrawTextXY(PlatContext* ctx, const char* text, int x, int y,
+                    PlatColor color, int fontSize, bool bold, const char* fontFamily);
+int PlatMeasureTextWidth(PlatContext* ctx, const char* text, int len,
+                         int fontSize, bool bold, const char* fontFamily);
+
+// ============================================================================
 // Game Constants
 // ============================================================================
 constexpr int WINDOW_WIDTH = 800;
@@ -325,7 +364,7 @@ void UpdateBackgroundLanders();
 
 // Game loop
 void UpdateGame();
-void RenderGame(HDC hdc);
+void RenderGame(PlatContext* ctx);
 
 // Physics
 void UpdatePhysics();
@@ -1046,26 +1085,13 @@ void UpdateParticles() {
 /**
  * @brief Render game scene
  */
-void RenderGame(HDC hdc) {
-    // Create double buffer
-    static HDC hdcMem = nullptr;
-    static HBITMAP hbmMem = nullptr;
-
-    if (!hdcMem) {
-        hdcMem = CreateCompatibleDC(hdc);
-        hbmMem = CreateCompatibleBitmap(hdc, WINDOW_WIDTH, WINDOW_HEIGHT);
-        SelectObject(hdcMem, hbmMem);
-    }
-
+void RenderGame(PlatContext* ctx) {
     // Clear background (space)
-    RECT rect = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
-    HBRUSH hBrushBlack = CreateSolidBrush(RGB(0, 0, 20));
-    FillRect(hdcMem, &rect, hBrushBlack);
-    DeleteObject(hBrushBlack);
+    PlatClear(ctx, MakeColor(0, 0, 20));
 
     // Draw stars
     for (const auto& star : stars) {
-        SetPixel(hdcMem, star.x, star.y, RGB(star.brightness, star.brightness, star.brightness));
+        PlatDrawPixel(ctx, star.x, star.y, MakeColor(star.brightness, star.brightness, star.brightness));
     }
 
     switch (gameState) {
@@ -1074,21 +1100,15 @@ void RenderGame(HDC hdc) {
             UpdateBackgroundLanders();
 
             // Draw simple ground line for background landers
-            HPEN hPenGround = CreatePen(PS_SOLID, 1, RGB(60, 60, 80));
-            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenGround);
-            MoveToEx(hdcMem, 0, WINDOW_HEIGHT - 50, nullptr);
-            LineTo(hdcMem, WINDOW_WIDTH, WINDOW_HEIGHT - 50);
-            SelectObject(hdcMem, hOldPen);
-            DeleteObject(hPenGround);
+            PlatDrawLine(ctx, 0, WINDOW_HEIGHT - 50, WINDOW_WIDTH, WINDOW_HEIGHT - 50,
+                         MakeColor(60, 60, 80), 1);
 
             // Draw each background lander
             for (const auto& bl : backgroundLanders) {
                 // Calculate alpha/brightness based on scale (depth)
                 int brightness = static_cast<int>(120 + bl.scale * 100);
-                COLORREF landerColor = RGB(brightness, brightness, brightness);
-
-                HPEN hPenLander = CreatePen(PS_SOLID, static_cast<int>(1 + bl.scale), landerColor);
-                hOldPen = (HPEN)SelectObject(hdcMem, hPenLander);
+                PlatColor landerColor = MakeColor(brightness, brightness, brightness);
+                int penWidth = static_cast<int>(1 + bl.scale);
 
                 float cos_r = std::cos(bl.rotation);
                 float sin_r = std::sin(bl.rotation);
@@ -1097,8 +1117,8 @@ void RenderGame(HDC hdc) {
                 // Helper to transform points with scale
                 auto transformBgPoint = [&](float x, float y) -> POINT {
                     POINT pt;
-                    pt.x = static_cast<LONG>(bl.pos.x + (x * cos_r - y * sin_r) * s);
-                    pt.y = static_cast<LONG>(bl.pos.y + (x * sin_r + y * cos_r) * s);
+                    pt.x = static_cast<long>(bl.pos.x + (x * cos_r - y * sin_r) * s);
+                    pt.y = static_cast<long>(bl.pos.y + (x * sin_r + y * cos_r) * s);
                     return pt;
                 };
 
@@ -1109,84 +1129,41 @@ void RenderGame(HDC hdc) {
                 body[2] = transformBgPoint(8, 4);
                 body[3] = transformBgPoint(-8, 4);
                 body[4] = body[0];
-                Polyline(hdcMem, body, 5);
+                PlatDrawPolyline(ctx, body, 5, landerColor, penWidth);
 
                 // Draw legs
                 POINT leg1Start = transformBgPoint(-8, 4);
                 POINT leg1End = transformBgPoint(-12, 10);
-                MoveToEx(hdcMem, leg1Start.x, leg1Start.y, nullptr);
-                LineTo(hdcMem, leg1End.x, leg1End.y);
+                PlatDrawLine(ctx, leg1Start.x, leg1Start.y, leg1End.x, leg1End.y, landerColor, penWidth);
 
                 POINT leg2Start = transformBgPoint(8, 4);
                 POINT leg2End = transformBgPoint(12, 10);
-                MoveToEx(hdcMem, leg2Start.x, leg2Start.y, nullptr);
-                LineTo(hdcMem, leg2End.x, leg2End.y);
+                PlatDrawLine(ctx, leg2Start.x, leg2Start.y, leg2End.x, leg2End.y, landerColor, penWidth);
 
                 // Draw thruster flame if active
                 if (bl.thrusterOn) {
-                    HPEN hPenFlame = CreatePen(PS_SOLID, static_cast<int>(2 * s), RGB(255, 150, 50));
-                    SelectObject(hdcMem, hPenFlame);
-
                     static std::uniform_int_distribution<int> bgFlameDist(0, 3);
                     int flameLen = static_cast<int>((8 + bgFlameDist(gen)) * s);
                     POINT flameStart = transformBgPoint(0, 4);
                     POINT flameEnd = transformBgPoint(0, 4 + flameLen);
-                    MoveToEx(hdcMem, flameStart.x, flameStart.y, nullptr);
-                    LineTo(hdcMem, flameEnd.x, flameEnd.y);
-
-                    DeleteObject(hPenFlame);
-                    SelectObject(hdcMem, hPenLander);
+                    PlatDrawLine(ctx, flameStart.x, flameStart.y, flameEnd.x, flameEnd.y,
+                                 MakeColor(255, 150, 50), static_cast<int>(2 * s));
                 }
-
-                SelectObject(hdcMem, hOldPen);
-                DeleteObject(hPenLander);
             }
 
             // Title
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            SetBkMode(hdcMem, TRANSPARENT);
-
-            HFONT hFont = CreateFontA(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            RECT titleRect = {0, 100, WINDOW_WIDTH, 150};
-            DrawTextA(hdcMem, "LUNAR LANDER", -1, &titleRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "LUNAR LANDER", 0, 100, WINDOW_WIDTH, 50,
+                         MakeColor(255, 255, 255), 48, true, "Arial");
 
             // Version and copyright info
-            hFont = CreateFontA(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            SetTextColor(hdcMem, RGB(180, 180, 180));
-            RECT versionRect = {0, 160, WINDOW_WIDTH, 180};
-            DrawTextA(hdcMem, "v" LANDER_VERSION_STRING, -1, &versionRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            RECT copyrightRect = {0, 180, WINDOW_WIDTH, 200};
-            DrawTextA(hdcMem, "Copyright (c) 2025 Todd Dube", -1, &copyrightRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            RECT githubRect = {0, 200, WINDOW_WIDTH, 220};
-            DrawTextA(hdcMem, "github.com/todddube/lander", -1, &githubRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "v" LANDER_VERSION_STRING, 0, 160, WINDOW_WIDTH, 20,
+                         MakeColor(180, 180, 180), 16, false, "Arial");
+            PlatDrawText(ctx, "Copyright (c) 2025 Todd Dube", 0, 180, WINDOW_WIDTH, 20,
+                         MakeColor(180, 180, 180), 16, false, "Arial");
+            PlatDrawText(ctx, "github.com/todddube/lander", 0, 200, WINDOW_WIDTH, 20,
+                         MakeColor(180, 180, 180), 16, false, "Arial");
 
             // Instructions
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            hFont = CreateFontA(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
             const char* instructions[] = {
                 "ARROW KEYS or WASD to control",
                 "SPACEBAR for main thruster",
@@ -1198,13 +1175,10 @@ void RenderGame(HDC hdc) {
 
             int y = 280;
             for (const auto* text : instructions) {
-                RECT textRect = {0, y, WINDOW_WIDTH, y + 25};
-                DrawTextA(hdcMem, text, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                PlatDrawText(ctx, text, 0, y, WINDOW_WIDTH, 25,
+                             MakeColor(255, 255, 255), 20, false, "Arial");
                 y += 30;
             }
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
             break;
         }
 
@@ -1212,65 +1186,47 @@ void RenderGame(HDC hdc) {
         case GameState::LANDING_SUCCESS:
         case GameState::CRASHED: {
             // Draw terrain with retro jagged mountain look
-            HPEN hPenTerrain = CreatePen(PS_SOLID, 2, RGB(180, 180, 180));
-            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenTerrain);
-            HBRUSH hBrushTerrain = CreateSolidBrush(RGB(80, 80, 80));
-            HBRUSH hOldBrush = (HBRUSH)SelectObject(hdcMem, hBrushTerrain);
+            {
+                // Build polygon for filled terrain
+                std::vector<POINT> terrainPolygon;
+                for (size_t i = 0; i < terrain.size(); i++) {
+                    POINT pt;
+                    pt.x = terrain[i].x;
+                    pt.y = terrain[i].y;
+                    terrainPolygon.push_back(pt);
+                }
+                // Add bottom corners to close polygon
+                POINT bottomRight = {WINDOW_WIDTH, WINDOW_HEIGHT};
+                POINT bottomLeft = {0, WINDOW_HEIGHT};
+                terrainPolygon.push_back(bottomRight);
+                terrainPolygon.push_back(bottomLeft);
 
-            // Build polygon for filled terrain
-            std::vector<POINT> terrainPolygon;
-            for (size_t i = 0; i < terrain.size(); i++) {
-                POINT pt;
-                pt.x = terrain[i].x;
-                pt.y = terrain[i].y;
-                terrainPolygon.push_back(pt);
+                // Fill terrain
+                PlatDrawPolygonFilled(ctx, terrainPolygon.data(),
+                                      static_cast<int>(terrainPolygon.size()),
+                                      MakeColor(80, 80, 80), MakeColor(180, 180, 180), 2);
             }
-            // Add bottom corners to close polygon
-            POINT bottomRight = {WINDOW_WIDTH, WINDOW_HEIGHT};
-            POINT bottomLeft = {0, WINDOW_HEIGHT};
-            terrainPolygon.push_back(bottomRight);
-            terrainPolygon.push_back(bottomLeft);
-
-            // Fill terrain
-            Polygon(hdcMem, terrainPolygon.data(), static_cast<int>(terrainPolygon.size()));
 
             // Draw landing pad with velocity-based color
-            // Determine pad color based on current velocity
-            COLORREF padColor;
-            float velocity = lander.vel.length();
-            if (velocity <= settings.safeLandingSpeed * 0.5f) {
-                // Safe - green
-                padColor = RGB(0, 255, 0);
-            } else if (velocity <= settings.safeLandingSpeed) {
-                // Caution - yellow
-                padColor = RGB(255, 255, 0);
-            } else {
-                // Danger - red
-                padColor = RGB(255, 0, 0);
+            {
+                PlatColor padColor;
+                float velocity = lander.vel.length();
+                if (velocity <= settings.safeLandingSpeed * 0.5f) {
+                    padColor = MakeColor(0, 255, 0);       // Safe - green
+                } else if (velocity <= settings.safeLandingSpeed) {
+                    padColor = MakeColor(255, 255, 0);     // Caution - yellow
+                } else {
+                    padColor = MakeColor(255, 0, 0);       // Danger - red
+                }
+
+                if (landingPadStart < static_cast<int>(terrain.size()) &&
+                    landingPadEnd <= static_cast<int>(terrain.size())) {
+                    int padY = terrain[landingPadStart].y;
+                    int padStartX = terrain[landingPadStart].x;
+                    int padEndX = terrain[landingPadEnd].x;
+                    PlatDrawLine(ctx, padStartX, padY, padEndX, padY, padColor, 4);
+                }
             }
-
-            // Draw the flat landing pad as a single horizontal line
-            if (landingPadStart < static_cast<int>(terrain.size()) &&
-                landingPadEnd <= static_cast<int>(terrain.size())) {
-                HPEN hPenPad = CreatePen(PS_SOLID, 4, padColor);
-                SelectObject(hdcMem, hPenPad);
-
-                // Draw single flat line across entire pad
-                int padY = terrain[landingPadStart].y;
-                int padStartX = terrain[landingPadStart].x;
-                int padEndX = terrain[landingPadEnd].x;
-
-                MoveToEx(hdcMem, padStartX, padY, nullptr);
-                LineTo(hdcMem, padEndX, padY);
-
-                DeleteObject(hPenPad);
-                SelectObject(hdcMem, hPenTerrain);
-            }
-
-            SelectObject(hdcMem, hOldBrush);
-            DeleteObject(hBrushTerrain);
-            SelectObject(hdcMem, hOldPen);
-            DeleteObject(hPenTerrain);
 
             // Draw shockwave rings FIRST (behind particles)
             for (const auto& sw : shockwaves) {
@@ -1279,20 +1235,13 @@ void RenderGame(HDC hdc) {
                 int g = static_cast<int>(ColorG(sw.color) * alpha);
                 int b = static_cast<int>(ColorB(sw.color) * alpha);
 
-                // Draw expanding ring
                 int thickness = static_cast<int>(3.0f * alpha);
                 if (thickness < 1) thickness = 1;
-                HPEN hPenRing = CreatePen(PS_SOLID, thickness, RGB(r, g, b));
-                HPEN hOldPenRing = (HPEN)SelectObject(hdcMem, hPenRing);
-                SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
 
                 int cx = static_cast<int>(sw.pos.x);
                 int cy = static_cast<int>(sw.pos.y);
                 int rad = static_cast<int>(sw.radius);
-                Ellipse(hdcMem, cx - rad, cy - rad, cx + rad, cy + rad);
-
-                SelectObject(hdcMem, hOldPenRing);
-                DeleteObject(hPenRing);
+                PlatDrawEllipseOutline(ctx, cx, cy, rad, rad, MakeColor(r, g, b), thickness);
             }
 
             // Draw particles with enhanced rendering
@@ -1304,7 +1253,7 @@ void RenderGame(HDC hdc) {
                 int g = static_cast<int>(ColorG(p.color) * alpha);
                 int b = static_cast<int>(ColorB(p.color) * alpha);
 
-                COLORREF fadedColor = RGB(r, g, b);
+                PlatColor fadedColor = MakeColor(r, g, b);
                 int px = static_cast<int>(p.pos.x);
                 int py = static_cast<int>(p.pos.y);
 
@@ -1313,11 +1262,10 @@ void RenderGame(HDC hdc) {
                     {
                         int size = static_cast<int>(p.size * alpha);
                         if (size < 1) size = 1;
-                        // Draw core
                         for (int dx = -size; dx <= size; dx++) {
                             for (int dy = -size; dy <= size; dy++) {
                                 if (dx*dx + dy*dy <= size*size) {
-                                    SetPixel(hdcMem, px + dx, py + dy, fadedColor);
+                                    PlatDrawPixel(ctx, px + dx, py + dy, fadedColor);
                                 }
                             }
                         }
@@ -1331,7 +1279,7 @@ void RenderGame(HDC hdc) {
                         for (int dx = -size; dx <= size; dx++) {
                             for (int dy = -size; dy <= size; dy++) {
                                 if (dx*dx + dy*dy <= size*size) {
-                                    SetPixel(hdcMem, px + dx, py + dy, fadedColor);
+                                    PlatDrawPixel(ctx, px + dx, py + dy, fadedColor);
                                 }
                             }
                         }
@@ -1343,7 +1291,7 @@ void RenderGame(HDC hdc) {
                         int size = static_cast<int>(p.size);
                         for (int dx = 0; dx < size; dx++) {
                             for (int dy = 0; dy < size; dy++) {
-                                SetPixel(hdcMem, px + dx, py + dy, fadedColor);
+                                PlatDrawPixel(ctx, px + dx, py + dy, fadedColor);
                             }
                         }
                         break;
@@ -1351,9 +1299,6 @@ void RenderGame(HDC hdc) {
 
                     case 3:  // Lander debris - rotating line segments
                     {
-                        HPEN hPenDebris = CreatePen(PS_SOLID, 2, fadedColor);
-                        HPEN hOldPenDebris = (HPEN)SelectObject(hdcMem, hPenDebris);
-
                         float cos_r = std::cos(p.rotation);
                         float sin_r = std::sin(p.rotation);
 
@@ -1362,33 +1307,18 @@ void RenderGame(HDC hdc) {
                         int x2 = static_cast<int>(p.pos.x + (p.endPos.x * cos_r - p.endPos.y * sin_r));
                         int y2 = static_cast<int>(p.pos.y + (p.endPos.x * sin_r + p.endPos.y * cos_r));
 
-                        MoveToEx(hdcMem, x1, y1, nullptr);
-                        LineTo(hdcMem, x2, y2);
-
-                        SelectObject(hdcMem, hOldPenDebris);
-                        DeleteObject(hPenDebris);
+                        PlatDrawLine(ctx, x1, y1, x2, y2, fadedColor, 2);
                         break;
                     }
 
                     case 4:  // Sparks - streaking lines
                     {
-                        HPEN hPenSpark = CreatePen(PS_SOLID, 1, fadedColor);
-                        HPEN hOldPenSpark = (HPEN)SelectObject(hdcMem, hPenSpark);
-
-                        // Draw spark with trail
-                        int trailLen = static_cast<int>(p.vel.length() * 0.5f);
-                        if (trailLen < 2) trailLen = 2;
                         int tx = static_cast<int>(p.pos.x - p.vel.x * 0.3f);
                         int ty = static_cast<int>(p.pos.y - p.vel.y * 0.3f);
 
-                        MoveToEx(hdcMem, tx, ty, nullptr);
-                        LineTo(hdcMem, px, py);
-
+                        PlatDrawLine(ctx, tx, ty, px, py, fadedColor, 1);
                         // Bright tip
-                        SetPixel(hdcMem, px, py, RGB(255, 255, 200));
-
-                        SelectObject(hdcMem, hOldPenSpark);
-                        DeleteObject(hPenSpark);
+                        PlatDrawPixel(ctx, px, py, MakeColor(255, 255, 200));
                         break;
                     }
 
@@ -1397,8 +1327,7 @@ void RenderGame(HDC hdc) {
                         int size = static_cast<int>(p.size);
                         if (size < 1) size = 1;
 
-                        // Draw bright center
-                        COLORREF brightColor = RGB(
+                        PlatColor brightColor = MakeColor(
                             std::min(255, r + 100),
                             std::min(255, g + 100),
                             std::min(255, b + 50)
@@ -1408,10 +1337,9 @@ void RenderGame(HDC hdc) {
                             for (int dy = -size; dy <= size; dy++) {
                                 float dist = std::sqrt(static_cast<float>(dx*dx + dy*dy));
                                 if (dist <= size) {
-                                    // Brighter in center
                                     float intensity = 1.0f - (dist / size);
-                                    COLORREF c = (intensity > 0.5f) ? brightColor : fadedColor;
-                                    SetPixel(hdcMem, px + dx, py + dy, c);
+                                    PlatColor c = (intensity > 0.5f) ? brightColor : fadedColor;
+                                    PlatDrawPixel(ctx, px + dx, py + dy, c);
                                 }
                             }
                         }
@@ -1422,8 +1350,8 @@ void RenderGame(HDC hdc) {
 
             // Draw Apollo-style lunar lander (if not crashed)
             if (!lander.crashed) {
-                HPEN hPenLander = CreatePen(PS_SOLID, 2, RGB(220, 220, 220));
-                hOldPen = (HPEN)SelectObject(hdcMem, hPenLander);
+                PlatColor landerBodyColor = MakeColor(220, 220, 220);
+                PlatColor legColor = MakeColor(180, 180, 180);
 
                 float cos_r = std::cos(lander.rotation);
                 float sin_r = std::sin(lander.rotation);
@@ -1431,8 +1359,8 @@ void RenderGame(HDC hdc) {
                 // Helper lambda to rotate and translate points
                 auto transformPoint = [&](float x, float y) -> POINT {
                     POINT pt;
-                    pt.x = static_cast<LONG>(lander.pos.x + (x * cos_r - y * sin_r));
-                    pt.y = static_cast<LONG>(lander.pos.y + (x * sin_r + y * cos_r));
+                    pt.x = static_cast<long>(lander.pos.x + (x * cos_r - y * sin_r));
+                    pt.y = static_cast<long>(lander.pos.y + (x * sin_r + y * cos_r));
                     return pt;
                 };
 
@@ -1443,7 +1371,7 @@ void RenderGame(HDC hdc) {
                 body[2] = transformPoint(8, 4);
                 body[3] = transformPoint(-8, 4);
                 body[4] = body[0];
-                Polyline(hdcMem, body, 5);
+                PlatDrawPolyline(ctx, body, 5, landerBodyColor, 2);
 
                 // Draw ascent stage (smaller top module)
                 POINT ascent[5];
@@ -1452,291 +1380,158 @@ void RenderGame(HDC hdc) {
                 ascent[2] = transformPoint(5, -4);
                 ascent[3] = transformPoint(-5, -4);
                 ascent[4] = ascent[0];
-                Polyline(hdcMem, ascent, 5);
+                PlatDrawPolyline(ctx, ascent, 5, landerBodyColor, 2);
 
                 // Draw landing legs (four legs)
-                HPEN hPenLegs = CreatePen(PS_SOLID, 1, RGB(180, 180, 180));
-                SelectObject(hdcMem, hPenLegs);
-
-                // Left legs
                 POINT leftLeg1Start = transformPoint(-8, 4);
                 POINT leftLeg1End = transformPoint(-12, 10);
-                MoveToEx(hdcMem, leftLeg1Start.x, leftLeg1Start.y, nullptr);
-                LineTo(hdcMem, leftLeg1End.x, leftLeg1End.y);
+                PlatDrawLine(ctx, leftLeg1Start.x, leftLeg1Start.y, leftLeg1End.x, leftLeg1End.y, legColor, 1);
 
                 POINT leftLeg2Start = transformPoint(-4, 4);
                 POINT leftLeg2End = transformPoint(-10, 10);
-                MoveToEx(hdcMem, leftLeg2Start.x, leftLeg2Start.y, nullptr);
-                LineTo(hdcMem, leftLeg2End.x, leftLeg2End.y);
+                PlatDrawLine(ctx, leftLeg2Start.x, leftLeg2Start.y, leftLeg2End.x, leftLeg2End.y, legColor, 1);
 
-                // Right legs
                 POINT rightLeg1Start = transformPoint(4, 4);
                 POINT rightLeg1End = transformPoint(10, 10);
-                MoveToEx(hdcMem, rightLeg1Start.x, rightLeg1Start.y, nullptr);
-                LineTo(hdcMem, rightLeg1End.x, rightLeg1End.y);
+                PlatDrawLine(ctx, rightLeg1Start.x, rightLeg1Start.y, rightLeg1End.x, rightLeg1End.y, legColor, 1);
 
                 POINT rightLeg2Start = transformPoint(8, 4);
                 POINT rightLeg2End = transformPoint(12, 10);
-                MoveToEx(hdcMem, rightLeg2Start.x, rightLeg2Start.y, nullptr);
-                LineTo(hdcMem, rightLeg2End.x, rightLeg2End.y);
+                PlatDrawLine(ctx, rightLeg2Start.x, rightLeg2Start.y, rightLeg2End.x, rightLeg2End.y, legColor, 1);
 
                 // Draw foot pads
-                MoveToEx(hdcMem, leftLeg1End.x - 2, leftLeg1End.y, nullptr);
-                LineTo(hdcMem, leftLeg1End.x + 2, leftLeg1End.y);
-                MoveToEx(hdcMem, rightLeg2End.x - 2, rightLeg2End.y, nullptr);
-                LineTo(hdcMem, rightLeg2End.x + 2, rightLeg2End.y);
-
-                DeleteObject(hPenLegs);
-                SelectObject(hdcMem, hPenLander);
+                PlatDrawLine(ctx, leftLeg1End.x - 2, leftLeg1End.y, leftLeg1End.x + 2, leftLeg1End.y, legColor, 1);
+                PlatDrawLine(ctx, rightLeg2End.x - 2, rightLeg2End.y, rightLeg2End.x + 2, rightLeg2End.y, legColor, 1);
 
                 // Draw main thruster flame
                 if (lander.mainThrusterOn) {
-                    HPEN hPenFlame = CreatePen(PS_SOLID, 3, RGB(255, 200, 0));
-                    SelectObject(hdcMem, hPenFlame);
-
                     static std::uniform_int_distribution<int> flameDist(0, 3);
-                    int flameLength = 12 + flameDist(gen);  // Flickering flame
+                    int flameLength = 12 + flameDist(gen);
                     POINT flameStart = transformPoint(0, 4);
                     POINT flameEnd = transformPoint(0, 4 + flameLength);
 
-                    MoveToEx(hdcMem, flameStart.x, flameStart.y, nullptr);
-                    LineTo(hdcMem, flameEnd.x, flameEnd.y);
+                    PlatColor flameColor = MakeColor(255, 200, 0);
+                    PlatDrawLine(ctx, flameStart.x, flameStart.y, flameEnd.x, flameEnd.y, flameColor, 3);
 
                     // Draw flame spread
                     POINT flameLeft = transformPoint(-2, 4 + flameLength - 3);
                     POINT flameRight = transformPoint(2, 4 + flameLength - 3);
-                    MoveToEx(hdcMem, flameStart.x, flameStart.y, nullptr);
-                    LineTo(hdcMem, flameLeft.x, flameLeft.y);
-                    MoveToEx(hdcMem, flameStart.x, flameStart.y, nullptr);
-                    LineTo(hdcMem, flameRight.x, flameRight.y);
-
-                    DeleteObject(hPenFlame);
-                    SelectObject(hdcMem, hPenLander);
+                    PlatDrawLine(ctx, flameStart.x, flameStart.y, flameLeft.x, flameLeft.y, flameColor, 3);
+                    PlatDrawLine(ctx, flameStart.x, flameStart.y, flameRight.x, flameRight.y, flameColor, 3);
                 }
 
                 // Draw attitude control thrusters
+                PlatColor rcsColor = MakeColor(255, 255, 100);
                 if (lander.leftThrusterOn) {
-                    HPEN hPenRCS = CreatePen(PS_SOLID, 2, RGB(255, 255, 100));
-                    SelectObject(hdcMem, hPenRCS);
                     POINT rcsStart = transformPoint(8, -6);
                     POINT rcsEnd = transformPoint(11, -6);
-                    MoveToEx(hdcMem, rcsStart.x, rcsStart.y, nullptr);
-                    LineTo(hdcMem, rcsEnd.x, rcsEnd.y);
-                    DeleteObject(hPenRCS);
-                    SelectObject(hdcMem, hPenLander);
+                    PlatDrawLine(ctx, rcsStart.x, rcsStart.y, rcsEnd.x, rcsEnd.y, rcsColor, 2);
                 }
                 if (lander.rightThrusterOn) {
-                    HPEN hPenRCS = CreatePen(PS_SOLID, 2, RGB(255, 255, 100));
-                    SelectObject(hdcMem, hPenRCS);
                     POINT rcsStart = transformPoint(-8, -6);
                     POINT rcsEnd = transformPoint(-11, -6);
-                    MoveToEx(hdcMem, rcsStart.x, rcsStart.y, nullptr);
-                    LineTo(hdcMem, rcsEnd.x, rcsEnd.y);
-                    DeleteObject(hPenRCS);
-                    SelectObject(hdcMem, hPenLander);
+                    PlatDrawLine(ctx, rcsStart.x, rcsStart.y, rcsEnd.x, rcsEnd.y, rcsColor, 2);
                 }
-
-                SelectObject(hdcMem, hOldPen);
-                DeleteObject(hPenLander);
             }
 
             // Draw HUD
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            SetBkMode(hdcMem, TRANSPARENT);
+            {
+                PlatColor hudColor = MakeColor(255, 255, 255);
+                char buffer[256];
 
-            HFONT hFont = CreateFontA(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Courier New");
-            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
+                snprintf(buffer, 256, "Score: %d", score);
+                PlatDrawTextXY(ctx, buffer, 10, 10, hudColor, 16, false, "Courier New");
 
-            char buffer[256];
-            snprintf(buffer, 256, "Score: %d", score);
-            TextOutA(hdcMem, 10, 10, buffer, static_cast<int>(strlen(buffer)));
+                snprintf(buffer, 256, "Level: %d", level);
+                PlatDrawTextXY(ctx, buffer, 10, 30, hudColor, 16, false, "Courier New");
 
-            snprintf(buffer, 256, "Level: %d", level);
-            TextOutA(hdcMem, 10, 30, buffer, static_cast<int>(strlen(buffer)));
+                snprintf(buffer, 256, "Lives: %d", lives);
+                PlatDrawTextXY(ctx, buffer, 10, 50, hudColor, 16, false, "Courier New");
 
-            snprintf(buffer, 256, "Lives: %d", lives);
-            TextOutA(hdcMem, 10, 50, buffer, static_cast<int>(strlen(buffer)));
+                snprintf(buffer, 256, "Fuel: %.1f", lander.fuel);
+                PlatDrawTextXY(ctx, buffer, 10, 70, hudColor, 16, false, "Courier New");
 
-            snprintf(buffer, 256, "Fuel: %.1f", lander.fuel);
-            TextOutA(hdcMem, 10, 70, buffer, static_cast<int>(strlen(buffer)));
+                snprintf(buffer, 256, "Velocity: %.2f", lander.vel.length());
+                PlatDrawTextXY(ctx, buffer, 10, 90, hudColor, 16, false, "Courier New");
 
-            snprintf(buffer, 256, "Velocity: %.2f", lander.vel.length());
-            TextOutA(hdcMem, 10, 90, buffer, static_cast<int>(strlen(buffer)));
-
-            // Velocity indicator
-            if (lander.vel.length() > settings.safeLandingSpeed) {
-                SetTextColor(hdcMem, RGB(255, 0, 0));
-                TextOutA(hdcMem, 150, 90, "TOO FAST!", 9);
-                SetTextColor(hdcMem, RGB(255, 255, 255));
+                // Velocity indicator
+                if (lander.vel.length() > settings.safeLandingSpeed) {
+                    PlatDrawTextXY(ctx, "TOO FAST!", 150, 90, MakeColor(255, 0, 0), 16, false, "Courier New");
+                }
             }
 
             // State messages
             if (gameState == GameState::LANDING_SUCCESS) {
-                HFONT hBigFont = CreateFontA(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-                SelectObject(hdcMem, hBigFont);
-                SetTextColor(hdcMem, RGB(0, 255, 0));
-
-                RECT msgRect = {0, WINDOW_HEIGHT / 2 - 50, WINDOW_WIDTH, WINDOW_HEIGHT / 2 + 50};
-                DrawTextA(hdcMem, "LANDING SUCCESSFUL!", -1, &msgRect,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-                SelectObject(hdcMem, hFont);
-                DeleteObject(hBigFont);
-                SetTextColor(hdcMem, RGB(255, 255, 255));
+                PlatDrawText(ctx, "LANDING SUCCESSFUL!", 0, WINDOW_HEIGHT / 2 - 50,
+                             WINDOW_WIDTH, 100, MakeColor(0, 255, 0), 36, true, "Arial");
             } else if (gameState == GameState::CRASHED) {
-                HFONT hBigFont = CreateFontA(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-                SelectObject(hdcMem, hBigFont);
-                SetTextColor(hdcMem, RGB(255, 0, 0));
-
-                RECT msgRect = {0, WINDOW_HEIGHT / 2 - 50, WINDOW_WIDTH, WINDOW_HEIGHT / 2 + 50};
-                DrawTextA(hdcMem, "CRASHED!", -1, &msgRect,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-                SelectObject(hdcMem, hFont);
-                DeleteObject(hBigFont);
-                SetTextColor(hdcMem, RGB(255, 255, 255));
+                PlatDrawText(ctx, "CRASHED!", 0, WINDOW_HEIGHT / 2 - 50,
+                             WINDOW_WIDTH, 100, MakeColor(255, 0, 0), 36, true, "Arial");
             }
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
             break;
         }
 
         case GameState::GAME_OVER: {
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            SetBkMode(hdcMem, TRANSPARENT);
-
-            HFONT hFont = CreateFontA(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            RECT titleRect = {0, 150, WINDOW_WIDTH, 200};
-            DrawTextA(hdcMem, "GAME OVER", -1, &titleRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
-
-            hFont = CreateFontA(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
+            PlatColor white = MakeColor(255, 255, 255);
+            PlatDrawText(ctx, "GAME OVER", 0, 150, WINDOW_WIDTH, 50,
+                         white, 48, true, "Arial");
 
             char buffer[128];
             snprintf(buffer, 128, "Final Score: %d", score);
-            RECT scoreRect = {0, 250, WINDOW_WIDTH, 280};
-            DrawTextA(hdcMem, buffer, -1, &scoreRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            PlatDrawText(ctx, buffer, 0, 250, WINDOW_WIDTH, 30,
+                         white, 24, false, "Arial");
 
             snprintf(buffer, 128, "Level Reached: %d", level);
-            RECT levelRect = {0, 290, WINDOW_WIDTH, 320};
-            DrawTextA(hdcMem, buffer, -1, &levelRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            PlatDrawText(ctx, buffer, 0, 290, WINDOW_WIDTH, 30,
+                         white, 24, false, "Arial");
 
-            RECT instructRect = {0, 380, WINDOW_WIDTH, 410};
-            DrawTextA(hdcMem, "Press SPACE to play again", -1, &instructRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "Press SPACE to play again", 0, 380, WINDOW_WIDTH, 30,
+                         white, 24, false, "Arial");
             break;
         }
 
         case GameState::ENTER_NAME: {
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            SetBkMode(hdcMem, TRANSPARENT);
+            PlatColor white = MakeColor(255, 255, 255);
+            PlatColor green = MakeColor(0, 255, 0);
 
-            HFONT hFont = CreateFontA(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
+            PlatDrawText(ctx, "HIGH SCORE!", 0, 150, WINDOW_WIDTH, 50,
+                         white, 36, true, "Arial");
 
-            RECT titleRect = {0, 150, WINDOW_WIDTH, 200};
-            DrawTextA(hdcMem, "HIGH SCORE!", -1, &titleRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
-
-            hFont = CreateFontA(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            RECT promptRect = {0, 250, WINDOW_WIDTH, 280};
-            DrawTextA(hdcMem, "Enter your name:", -1, &promptRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            PlatDrawText(ctx, "Enter your name:", 0, 250, WINDOW_WIDTH, 30,
+                         white, 20, false, "Arial");
 
             // Draw name input box with dark background
-            RECT nameRect = {WINDOW_WIDTH / 2 - 100, 300, WINDOW_WIDTH / 2 + 100, 340};
-
-            // Fill background with dark color
-            HBRUSH hBrushInput = CreateSolidBrush(RGB(20, 20, 40));
-            FillRect(hdcMem, &nameRect, hBrushInput);
-            DeleteObject(hBrushInput);
-
-            // Draw border
-            HPEN hPenBorder = CreatePen(PS_SOLID, 2, RGB(0, 255, 0));
-            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenBorder);
-            SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
-            Rectangle(hdcMem, nameRect.left, nameRect.top, nameRect.right, nameRect.bottom);
-            SelectObject(hdcMem, hOldPen);
-            DeleteObject(hPenBorder);
+            int boxX = WINDOW_WIDTH / 2 - 100;
+            int boxY = 300;
+            int boxW = 200;
+            int boxH = 40;
+            PlatDrawRect(ctx, boxX, boxY, boxW, boxH, MakeColor(20, 20, 40));
+            PlatDrawRectOutline(ctx, boxX, boxY, boxW, boxH, green, 2);
 
             // Draw text in bright green
-            SetTextColor(hdcMem, RGB(0, 255, 0));
-            DrawTextA(hdcMem, playerName, -1, &nameRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            PlatDrawText(ctx, playerName, boxX, boxY, boxW, boxH,
+                         green, 20, false, "Arial");
 
             // Draw cursor blink
             static int cursorBlink = 0;
             cursorBlink = (cursorBlink + 1) % 60;
             if (cursorBlink < 30 && nameLength < 20) {
-                SIZE textSize;
-                HDC hdcTemp = GetDC(nullptr);
-                SelectObject(hdcTemp, hFont);
-                GetTextExtentPoint32A(hdcTemp, playerName, nameLength, &textSize);
-                ReleaseDC(nullptr, hdcTemp);
-
-                int cursorX = (WINDOW_WIDTH / 2) + (textSize.cx / 2) + 2;
-                MoveToEx(hdcMem, cursorX, nameRect.top + 10, nullptr);
-                LineTo(hdcMem, cursorX, nameRect.bottom - 10);
+                int textWidth = PlatMeasureTextWidth(ctx, playerName, nameLength,
+                                                     20, false, "Arial");
+                int cursorX = (WINDOW_WIDTH / 2) + (textWidth / 2) + 2;
+                PlatDrawLine(ctx, cursorX, boxY + 10, cursorX, boxY + boxH - 10, green, 1);
             }
 
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            RECT instructRect = {0, 380, WINDOW_WIDTH, 410};
-            DrawTextA(hdcMem, "Press ENTER when done", -1, &instructRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "Press ENTER when done", 0, 380, WINDOW_WIDTH, 30,
+                         white, 20, false, "Arial");
             break;
         }
 
         case GameState::HIGH_SCORES: {
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            SetBkMode(hdcMem, TRANSPARENT);
+            PlatColor white = MakeColor(255, 255, 255);
 
-            HFONT hFont = CreateFontA(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            RECT titleRect = {0, 50, WINDOW_WIDTH, 100};
-            DrawTextA(hdcMem, "HIGH SCORES", -1, &titleRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
-
-            hFont = CreateFontA(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Courier New");
-            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
+            PlatDrawText(ctx, "HIGH SCORES", 0, 50, WINDOW_WIDTH, 50,
+                         white, 36, true, "Arial");
 
             int y = 130;
             char buffer[256];
@@ -1744,114 +1539,70 @@ void RenderGame(HDC hdc) {
                 if (highScores[i].score > 0) {
                     snprintf(buffer, 256, "%2d. %-20s %6d  Lvl %2d",
                                    i + 1, highScores[i].name, highScores[i].score, highScores[i].level);
-                    TextOutA(hdcMem, 100, y, buffer, static_cast<int>(strlen(buffer)));
                 } else {
                     snprintf(buffer, 256, "%2d. ---", i + 1);
-                    TextOutA(hdcMem, 100, y, buffer, static_cast<int>(strlen(buffer)));
                 }
+                PlatDrawTextXY(ctx, buffer, 100, y, white, 20, false, "Courier New");
                 y += 35;
             }
 
-            RECT instructRect = {0, 520, WINDOW_WIDTH, 550};
-            DrawTextA(hdcMem, "Press ESC to return", -1, &instructRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "Press ESC to return", 0, 520, WINDOW_WIDTH, 30,
+                         white, 20, false, "Arial");
             break;
         }
 
         case GameState::CONFIRM_QUIT: {
             // Draw semi-transparent overlay
+            PlatColor black = MakeColor(0, 0, 0);
             for (int oy = 0; oy < WINDOW_HEIGHT; oy += 2) {
                 for (int ox = 0; ox < WINDOW_WIDTH; ox += 2) {
-                    SetPixel(hdcMem, ox, oy, RGB(0, 0, 0));
+                    PlatDrawPixel(ctx, ox, oy, black);
                 }
             }
 
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            SetBkMode(hdcMem, TRANSPARENT);
-
             // Draw dialog box background
-            RECT dialogRect = {WINDOW_WIDTH / 2 - 180, WINDOW_HEIGHT / 2 - 80,
-                              WINDOW_WIDTH / 2 + 180, WINDOW_HEIGHT / 2 + 80};
-            HBRUSH hBrushDialog = CreateSolidBrush(RGB(20, 20, 40));
-            FillRect(hdcMem, &dialogRect, hBrushDialog);
-            DeleteObject(hBrushDialog);
-
-            // Draw border
-            HPEN hPenBorder = CreatePen(PS_SOLID, 3, RGB(255, 200, 0));
-            HPEN hOldPen = (HPEN)SelectObject(hdcMem, hPenBorder);
-            SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
-            Rectangle(hdcMem, dialogRect.left, dialogRect.top, dialogRect.right, dialogRect.bottom);
-            SelectObject(hdcMem, hOldPen);
-            DeleteObject(hPenBorder);
+            int dlgX = WINDOW_WIDTH / 2 - 180;
+            int dlgY = WINDOW_HEIGHT / 2 - 80;
+            int dlgW = 360;
+            int dlgH = 160;
+            PlatDrawRect(ctx, dlgX, dlgY, dlgW, dlgH, MakeColor(20, 20, 40));
+            PlatDrawRectOutline(ctx, dlgX, dlgY, dlgW, dlgH,
+                                MakeColor(255, 200, 0), 3);
 
             // Title
-            HFONT hFont = CreateFontA(28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            SetTextColor(hdcMem, RGB(255, 200, 0));
-            RECT titleRect = {dialogRect.left, dialogRect.top + 15, dialogRect.right, dialogRect.top + 50};
+            PlatColor titleColor = MakeColor(255, 200, 0);
             if (confirmMode == ConfirmMode::QUIT) {
-                DrawTextA(hdcMem, "QUIT GAME?", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                PlatDrawText(ctx, "QUIT GAME?", dlgX, dlgY + 15, dlgW, 35,
+                             titleColor, 28, true, "Arial");
             } else {
-                DrawTextA(hdcMem, "RESTART GAME?", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                PlatDrawText(ctx, "RESTART GAME?", dlgX, dlgY + 15, dlgW, 35,
+                             titleColor, 28, true, "Arial");
             }
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
 
             // Options
-            hFont = CreateFontA(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            RECT option1Rect = {dialogRect.left, dialogRect.top + 60, dialogRect.right, dialogRect.top + 85};
-            RECT option2Rect = {dialogRect.left, dialogRect.top + 90, dialogRect.right, dialogRect.top + 115};
-            RECT option3Rect = {dialogRect.left, dialogRect.top + 120, dialogRect.right, dialogRect.top + 145};
-
+            PlatColor white = MakeColor(255, 255, 255);
             if (confirmMode == ConfirmMode::QUIT) {
-                DrawTextA(hdcMem, "Q - Quit to Desktop", -1, &option1Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                DrawTextA(hdcMem, "R - Restart Game", -1, &option2Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                PlatDrawText(ctx, "Q - Quit to Desktop", dlgX, dlgY + 60, dlgW, 25,
+                             white, 20, false, "Arial");
+                PlatDrawText(ctx, "R - Restart Game", dlgX, dlgY + 90, dlgW, 25,
+                             white, 20, false, "Arial");
             } else {
-                DrawTextA(hdcMem, "R - Restart Game", -1, &option1Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                DrawTextA(hdcMem, "Q - Quit to Desktop", -1, &option2Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                PlatDrawText(ctx, "R - Restart Game", dlgX, dlgY + 60, dlgW, 25,
+                             white, 20, false, "Arial");
+                PlatDrawText(ctx, "Q - Quit to Desktop", dlgX, dlgY + 90, dlgW, 25,
+                             white, 20, false, "Arial");
             }
-            DrawTextA(hdcMem, "ESC - Cancel", -1, &option3Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "ESC - Cancel", dlgX, dlgY + 120, dlgW, 25,
+                         white, 20, false, "Arial");
             break;
         }
 
         case GameState::SETTINGS: {
-            SetTextColor(hdcMem, RGB(255, 255, 255));
-            SetBkMode(hdcMem, TRANSPARENT);
-
             // Title
-            HFONT hFont = CreateFontA(36, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            HFONT hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
-            SetTextColor(hdcMem, RGB(255, 200, 0));
-            RECT titleRect = {0, 50, WINDOW_WIDTH, 100};
-            DrawTextA(hdcMem, "SETTINGS", -1, &titleRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "SETTINGS", 0, 50, WINDOW_WIDTH, 50,
+                         MakeColor(255, 200, 0), 36, true, "Arial");
 
             // Settings options
-            hFont = CreateFontA(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Courier New");
-            hOldFont = (HFONT)SelectObject(hdcMem, hFont);
-
             const char* settingNames[] = {
                 "Gravity",
                 "Thrust Power",
@@ -1871,43 +1622,33 @@ void RenderGame(HDC hdc) {
             int y = 140;
             char buffer[128];
             for (int i = 0; i < 5; i++) {
-                // Highlight selected option
+                PlatColor optColor;
                 if (i == settings.selectedOption) {
-                    SetTextColor(hdcMem, RGB(0, 255, 0));
+                    optColor = MakeColor(0, 255, 0);
                     snprintf(buffer, 128, "> %-18s: %8.3f <", settingNames[i], *settingValues[i]);
                 } else {
-                    SetTextColor(hdcMem, RGB(200, 200, 200));
+                    optColor = MakeColor(200, 200, 200);
                     snprintf(buffer, 128, "  %-18s: %8.3f", settingNames[i], *settingValues[i]);
                 }
-
-                RECT optRect = {100, y, WINDOW_WIDTH - 100, y + 30};
-                DrawTextA(hdcMem, buffer, -1, &optRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                PlatDrawText(ctx, buffer, 100, y, WINDOW_WIDTH - 200, 30,
+                             optColor, 22, false, "Courier New", PlatTextAlign::LEFT);
                 y += 40;
             }
 
             // Instructions
             y += 30;
-            SetTextColor(hdcMem, RGB(150, 150, 150));
-            HFONT hSmallFont = CreateFontA(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                          CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
-            SelectObject(hdcMem, hSmallFont);
-
-            RECT instr1 = {0, y, WINDOW_WIDTH, y + 25};
-            DrawTextA(hdcMem, "UP/DOWN - Select option", -1, &instr1, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            PlatColor instrColor = MakeColor(150, 150, 150);
+            PlatDrawText(ctx, "UP/DOWN - Select option", 0, y, WINDOW_WIDTH, 25,
+                         instrColor, 18, false, "Arial");
             y += 25;
-            RECT instr2 = {0, y, WINDOW_WIDTH, y + 25};
-            DrawTextA(hdcMem, "LEFT/RIGHT - Adjust value", -1, &instr2, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            PlatDrawText(ctx, "LEFT/RIGHT - Adjust value", 0, y, WINDOW_WIDTH, 25,
+                         instrColor, 18, false, "Arial");
             y += 25;
-            RECT instr3 = {0, y, WINDOW_WIDTH, y + 25};
-            DrawTextA(hdcMem, "R - Reset to defaults", -1, &instr3, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            PlatDrawText(ctx, "R - Reset to defaults", 0, y, WINDOW_WIDTH, 25,
+                         instrColor, 18, false, "Arial");
             y += 25;
-            RECT instr4 = {0, y, WINDOW_WIDTH, y + 25};
-            DrawTextA(hdcMem, "ESC - Return to menu (auto-saves)", -1, &instr4, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdcMem, hOldFont);
-            DeleteObject(hSmallFont);
-            DeleteObject(hFont);
+            PlatDrawText(ctx, "ESC - Return to menu (auto-saves)", 0, y, WINDOW_WIDTH, 25,
+                         instrColor, 18, false, "Arial");
             break;
         }
 
@@ -1915,8 +1656,6 @@ void RenderGame(HDC hdc) {
             break;
     }
 
-    // Copy back buffer to screen
-    BitBlt(hdc, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, hdcMem, 0, 0, SRCCOPY);
 }
 
 // ============================================================================
@@ -2435,6 +2174,157 @@ float Clamp(float value, float min, float max) {
 }
 
 // ============================================================================
+// Platform Abstraction Layer — Windows Implementation
+// ============================================================================
+
+#ifdef _WIN32
+
+struct PlatContext {
+    HDC hdc;        // Memory DC for double buffering
+    HBITMAP hbm;    // Off-screen bitmap
+    HDC hdcScreen;  // Screen DC (for final blit)
+};
+
+// Singleton context (one frame buffer, reused each frame)
+static PlatContext g_platCtx = {};
+
+PlatContext* PlatBeginFrame() {
+    return &g_platCtx;
+}
+
+void PlatEndFrame(PlatContext* ctx, void* nativeTarget) {
+    HDC hdcTarget = static_cast<HDC>(nativeTarget);
+    BitBlt(hdcTarget, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, ctx->hdc, 0, 0, SRCCOPY);
+}
+
+void PlatInitContext(HDC hdcScreen) {
+    if (!g_platCtx.hdc) {
+        g_platCtx.hdc = CreateCompatibleDC(hdcScreen);
+        g_platCtx.hbm = CreateCompatibleBitmap(hdcScreen, WINDOW_WIDTH, WINDOW_HEIGHT);
+        SelectObject(g_platCtx.hdc, g_platCtx.hbm);
+    }
+    g_platCtx.hdcScreen = hdcScreen;
+}
+
+void PlatClear(PlatContext* ctx, PlatColor color) {
+    RECT rect = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
+    HBRUSH hBrush = CreateSolidBrush(PlatColorToNative(color));
+    FillRect(ctx->hdc, &rect, hBrush);
+    DeleteObject(hBrush);
+}
+
+void PlatDrawLine(PlatContext* ctx, int x1, int y1, int x2, int y2, PlatColor color, int width) {
+    HPEN hPen = CreatePen(PS_SOLID, width, PlatColorToNative(color));
+    HPEN hOld = (HPEN)SelectObject(ctx->hdc, hPen);
+    MoveToEx(ctx->hdc, x1, y1, nullptr);
+    LineTo(ctx->hdc, x2, y2);
+    SelectObject(ctx->hdc, hOld);
+    DeleteObject(hPen);
+}
+
+void PlatDrawPolyline(PlatContext* ctx, const POINT* pts, int count, PlatColor color, int width) {
+    HPEN hPen = CreatePen(PS_SOLID, width, PlatColorToNative(color));
+    HPEN hOld = (HPEN)SelectObject(ctx->hdc, hPen);
+    Polyline(ctx->hdc, pts, count);
+    SelectObject(ctx->hdc, hOld);
+    DeleteObject(hPen);
+}
+
+void PlatDrawPolygonFilled(PlatContext* ctx, const POINT* pts, int count,
+                           PlatColor fillColor, PlatColor outlineColor, int outlineWidth) {
+    HPEN hPen = CreatePen(PS_SOLID, outlineWidth, PlatColorToNative(outlineColor));
+    HBRUSH hBrush = CreateSolidBrush(PlatColorToNative(fillColor));
+    HPEN hOldPen = (HPEN)SelectObject(ctx->hdc, hPen);
+    HBRUSH hOldBrush = (HBRUSH)SelectObject(ctx->hdc, hBrush);
+    Polygon(ctx->hdc, pts, count);
+    SelectObject(ctx->hdc, hOldBrush);
+    DeleteObject(hBrush);
+    SelectObject(ctx->hdc, hOldPen);
+    DeleteObject(hPen);
+}
+
+void PlatDrawEllipseOutline(PlatContext* ctx, int cx, int cy, int rx, int ry,
+                            PlatColor color, int width) {
+    HPEN hPen = CreatePen(PS_SOLID, width, PlatColorToNative(color));
+    HPEN hOld = (HPEN)SelectObject(ctx->hdc, hPen);
+    HBRUSH hOldBrush = (HBRUSH)SelectObject(ctx->hdc, GetStockObject(NULL_BRUSH));
+    Ellipse(ctx->hdc, cx - rx, cy - ry, cx + rx, cy + ry);
+    SelectObject(ctx->hdc, hOldBrush);
+    SelectObject(ctx->hdc, hOld);
+    DeleteObject(hPen);
+}
+
+void PlatDrawRect(PlatContext* ctx, int x, int y, int w, int h, PlatColor fillColor) {
+    RECT rect = {x, y, x + w, y + h};
+    HBRUSH hBrush = CreateSolidBrush(PlatColorToNative(fillColor));
+    FillRect(ctx->hdc, &rect, hBrush);
+    DeleteObject(hBrush);
+}
+
+void PlatDrawRectOutline(PlatContext* ctx, int x, int y, int w, int h,
+                         PlatColor color, int width) {
+    HPEN hPen = CreatePen(PS_SOLID, width, PlatColorToNative(color));
+    HPEN hOld = (HPEN)SelectObject(ctx->hdc, hPen);
+    HBRUSH hOldBrush = (HBRUSH)SelectObject(ctx->hdc, GetStockObject(NULL_BRUSH));
+    Rectangle(ctx->hdc, x, y, x + w, y + h);
+    SelectObject(ctx->hdc, hOldBrush);
+    SelectObject(ctx->hdc, hOld);
+    DeleteObject(hPen);
+}
+
+void PlatDrawPixel(PlatContext* ctx, int x, int y, PlatColor color) {
+    SetPixel(ctx->hdc, x, y, PlatColorToNative(color));
+}
+
+void PlatDrawText(PlatContext* ctx, const char* text, int x, int y, int w, int h,
+                  PlatColor color, int fontSize, bool bold, const char* fontFamily,
+                  PlatTextAlign align) {
+    HFONT hFont = CreateFontA(fontSize, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL,
+                              FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, fontFamily);
+    HFONT hOld = (HFONT)SelectObject(ctx->hdc, hFont);
+    SetTextColor(ctx->hdc, PlatColorToNative(color));
+    SetBkMode(ctx->hdc, TRANSPARENT);
+    RECT rect = {x, y, x + w, y + h};
+    UINT flags = DT_VCENTER | DT_SINGLELINE;
+    flags |= (align == PlatTextAlign::CENTER) ? DT_CENTER : DT_LEFT;
+    DrawTextA(ctx->hdc, text, -1, &rect, flags);
+    SelectObject(ctx->hdc, hOld);
+    DeleteObject(hFont);
+}
+
+void PlatDrawTextXY(PlatContext* ctx, const char* text, int x, int y,
+                    PlatColor color, int fontSize, bool bold, const char* fontFamily) {
+    HFONT hFont = CreateFontA(fontSize, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL,
+                              FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, fontFamily);
+    HFONT hOld = (HFONT)SelectObject(ctx->hdc, hFont);
+    SetTextColor(ctx->hdc, PlatColorToNative(color));
+    SetBkMode(ctx->hdc, TRANSPARENT);
+    TextOutA(ctx->hdc, x, y, text, static_cast<int>(strlen(text)));
+    SelectObject(ctx->hdc, hOld);
+    DeleteObject(hFont);
+}
+
+int PlatMeasureTextWidth(PlatContext* ctx, const char* text, int len,
+                         int fontSize, bool bold, const char* fontFamily) {
+    HFONT hFont = CreateFontA(fontSize, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL,
+                              FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, fontFamily);
+    HFONT hOld = (HFONT)SelectObject(ctx->hdc, hFont);
+    SIZE textSize;
+    GetTextExtentPoint32A(ctx->hdc, text, len, &textSize);
+    SelectObject(ctx->hdc, hOld);
+    DeleteObject(hFont);
+    return textSize.cx;
+}
+
+#endif // _WIN32
+
+// ============================================================================
 // Windows Message Handling
 // ============================================================================
 
@@ -2471,7 +2361,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            RenderGame(hdc);
+            PlatInitContext(hdc);
+            PlatContext* ctx = PlatBeginFrame();
+            RenderGame(ctx);
+            PlatEndFrame(ctx, hdc);
             EndPaint(hwnd, &ps);
             return 0;
         }
