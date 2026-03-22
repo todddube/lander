@@ -1,6 +1,6 @@
 # Lunar Lander
 
-A classic lunar lander game for Windows, written in C++17 using Win32 GDI API. Navigate your spacecraft through space and land safely on the moon's surface while managing fuel and velocity!
+A classic lunar lander game written in C++17 for Windows and macOS. Navigate your spacecraft through space and land safely on the moon's surface while managing fuel and velocity!
 
 ## Features
 
@@ -28,7 +28,8 @@ A classic lunar lander game for Windows, written in C++17 using Win32 GDI API. N
 
 ### Technical
 - **Single File Design** - Entire game in one C++ file
-- **No External Dependencies** - Only Windows SDK required
+- **Cross-Platform** - Runs on Windows and macOS
+- **No External Dependencies** - Only platform SDK required
 - **Modern C++17** - Clean, modern codebase
 - **60 FPS Gameplay** - Smooth animation and physics
 - **Double Buffering** - Flicker-free rendering
@@ -37,7 +38,9 @@ A classic lunar lander game for Windows, written in C++17 using Win32 GDI API. N
 
 ## Building from Source
 
-### Prerequisites
+### Windows
+
+#### Prerequisites
 
 You need one of the following installed on Windows:
 
@@ -47,7 +50,7 @@ You need one of the following installed on Windows:
 | **Visual Studio** | [Visual Studio 2019+](https://visualstudio.microsoft.com/downloads/) with "Desktop development with C++" workload |
 | **MinGW** | [MinGW-w64](https://www.mingw-w64.org/downloads/) - Add `bin` folder to PATH |
 
-### Quick Build
+#### Quick Build (Windows)
 
 ```batch
 # Clone the repository
@@ -61,32 +64,26 @@ build.bat
 build\lander.exe
 ```
 
-### Build Methods
+#### Build Methods (Windows)
 
-#### CMake (Recommended)
+**CMake (Recommended)**
 ```batch
-# Configure
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-
-# Build
 cmake --build build --config Release
-
-# Run
 build\lander.exe
 ```
 
-#### Visual Studio (Developer Command Prompt)
+**Visual Studio (Developer Command Prompt)**
 ```batch
-# Open "Developer Command Prompt for VS" first
 cl /O2 /EHsc /std:c++17 /W4 /I.\build /Fe:build\lander.exe lander.cpp user32.lib gdi32.lib winmm.lib
 ```
 
-#### MinGW
+**MinGW**
 ```batch
 g++ -std=c++17 -O2 -Wall -Wextra -I./build -o build\lander.exe lander.cpp -luser32 -lgdi32 -lwinmm -mwindows
 ```
 
-### Build Script Options
+#### Build Script Options (Windows)
 
 ```batch
 build.bat              # Release build (default)
@@ -95,14 +92,46 @@ build.bat 1.2.0        # Build with specific version
 build.bat 1.2.0 Debug  # Version + Debug
 ```
 
+### macOS
+
+#### Prerequisites
+
+- macOS 14+ (Sonoma or later)
+- Xcode Command Line Tools: `xcode-select --install`
+- Optionally [CMake 3.20+](https://cmake.org/download/) (`brew install cmake`)
+
+#### Quick Build (macOS)
+
+```bash
+# Clone the repository
+git clone https://github.com/todddube/lander.git
+cd lander
+
+# Build with CMake
+cmake -B build -S .
+cmake --build build
+
+# Or build directly with clang++
+mkdir -p build
+clang++ -std=c++17 -O2 -x objective-c++ \
+    -framework Cocoa -framework CoreGraphics \
+    -framework CoreText -framework AudioToolbox \
+    -o build/lander lander.cpp
+
+# Run the game
+./build/lander
+```
+
 ### Build Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| `'cmake' is not recognized` | Install CMake and add to PATH |
-| `'cl' is not recognized` | Use "Developer Command Prompt for VS" |
-| `'g++' is not recognized` | Add MinGW bin directory to PATH |
-| Linker errors | Ensure linking `user32.lib`, `gdi32.lib`, `winmm.lib` |
+| Problem | Platform | Solution |
+|---------|----------|----------|
+| `'cmake' is not recognized` | Windows | Install CMake and add to PATH |
+| `'cl' is not recognized` | Windows | Use "Developer Command Prompt for VS" |
+| `'g++' is not recognized` | Windows | Add MinGW bin directory to PATH |
+| Linker errors (Windows) | Windows | Ensure linking `user32.lib`, `gdi32.lib`, `winmm.lib` |
+| `xcode-select: error` | macOS | Run `xcode-select --install` to install dev tools |
+| Framework not found | macOS | Ensure Xcode Command Line Tools are installed |
 
 ---
 
@@ -146,8 +175,8 @@ build.bat 1.2.0 Debug  # Version + Debug
 
 ### Scoring
 
-- **Base Landing**: 100 points × level
-- **Fuel Bonus**: 2 points per unit remaining × level
+- **Base Landing**: 100 points x level
+- **Fuel Bonus**: 2 points per unit remaining x level
 - **Speed Bonus**: 50 points for very gentle landing
 - **Center Bonus**: 100 points for landing in center of pad
 
@@ -157,9 +186,9 @@ build.bat 1.2.0 Debug  # Version + Debug
 
 ```
 lander/
-├── lander.cpp          # Main game source (single file)
-├── CMakeLists.txt      # CMake build configuration
-├── build.bat           # Smart build script
+├── lander.cpp          # Main game source (single file, cross-platform)
+├── CMakeLists.txt      # CMake build configuration (Windows + macOS)
+├── build.bat           # Windows build script
 ├── VERSION             # Version number (e.g., 1.0.0)
 ├── version.h.in        # Version header template
 ├── lander.rc.in        # Windows resource template
@@ -191,7 +220,8 @@ See [Releases](https://github.com/todddube/lander/releases) for download.
 ## Technical Details
 
 ### Architecture
-- **Single-file design** - All code in `lander.cpp` (~2000 lines)
+- **Single-file design** - All code in `lander.cpp` (~3300 lines)
+- **Platform Abstraction Layer** - Portable drawing, sound, and input via `#ifdef` guards
 - **Entity-component pattern** - Lander, terrain, particles
 - **State machine** - Clean game state management
 - **Double buffering** - Flicker-free rendering
@@ -203,20 +233,23 @@ See [Releases](https://github.com/todddube/lander/releases) for download.
 - **Collision detection** - Terrain intersection testing
 
 ### Graphics
-- **Win32 GDI** - Hardware-accelerated 2D rendering
-- **Vector rendering** - Points, lines, and polygons
+- **Windows**: Win32 GDI — hardware-accelerated 2D rendering
+- **macOS**: CoreGraphics — bitmap context with Y-flip for Windows coordinate compatibility
+- **Text**: GDI DrawText (Windows) / Core Text (macOS)
 - **Particle system** - Explosion and thruster effects
 - **Procedural terrain** - Runtime-generated landscapes
 
 ### Audio
-- **waveOut API** - Custom synthesized sounds
-- **Rocket thrust** - Continuous engine rumble
-- **Explosion** - Multi-phase KABOOM effect
+- **Windows**: waveOut API — custom synthesized sounds
+- **macOS**: AudioToolbox AudioQueue — streaming and one-shot playback
+- **Rocket thrust** - Continuous engine rumble (double-buffered streaming)
+- **Explosion** - Multi-phase synthesized KABOOM effect
 - **Space theme** - Cinematic intro music
 
 ### Compatibility
-- **Windows 7+** - Full compatibility
-- **DPI Aware** - Scales properly on high-DPI displays
+- **Windows 7+** - Full compatibility (Win32 GDI)
+- **macOS 14+** - Cocoa / CoreGraphics / AudioToolbox
+- **DPI Aware** - Scales properly on high-DPI displays (Windows)
 - **No admin required** - Standard user privileges
 
 ---
