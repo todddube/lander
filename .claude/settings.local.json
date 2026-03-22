@@ -14,7 +14,15 @@
       "Bash(cmd.exe /c \"cd /d C:\\Users\\todd\\OneDrive\\Documents\\GitHub\\lander && call build.bat 2>&1\")",
       "Bash(cmd.exe /c:*)",
       "Bash(del \"c:\\\\Users\\\\todd\\\\OneDrive\\\\Documents\\\\GitHub\\\\lander\\\\RELEASE.md\")",
-      "Bash(del \"c:\\\\Users\\\\todd\\\\OneDrive\\\\Documents\\\\GitHub\\\\lander\\\\RELEASE_GUIDE.md\")"
+      "Bash(del \"c:\\\\Users\\\\todd\\\\OneDrive\\\\Documents\\\\GitHub\\\\lander\\\\RELEASE_GUIDE.md\")",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(clang++:*)",
+      "Bash(bash build_mac.sh)",
+      "Bash(xcodebuild -version)",
+      "Bash(sw_vers)",
+      "Bash(bash build_mac.sh Debug 2>&1)"
     ],
     "deny": [],
     "ask": []
