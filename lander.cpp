@@ -44,6 +44,7 @@
 #include <random>
 #include <string>
 #include <fstream>
+#include <sstream>
 #include <iomanip>
 #include <thread>
 #include <atomic>
@@ -354,8 +355,12 @@ int stateTimer = 0;  // Timer for state transitions (moved from local static)
 std::random_device rd;
 std::mt19937 gen(rd());
 
-// High score file path
+// High score file path and portable text-format header.
+// The format is line-based text (not a raw struct dump) so save files are
+// portable across compilers, platforms, and struct layouts.
 const char* HIGH_SCORE_FILE = "lander_scores.dat";
+const char* HIGH_SCORE_MAGIC = "LANDER_HIGHSCORES";
+constexpr int HIGH_SCORE_FORMAT_VERSION = 1;
 
 // Settings file path and global settings
 const char* SETTINGS_FILE = "lander.ini";
@@ -503,6 +508,15 @@ void InitTerrain() {
 
     landingPadStart = padPosition;
     landingPadEnd = padPosition + padWidth;
+
+    // Clamp the pad to valid terrain indices. Every consumer (collision check,
+    // center-of-pad scoring, and the pad-drawing code) indexes
+    // terrain[landingPadStart] and terrain[landingPadEnd], so both must stay
+    // within [0, TERRAIN_POINTS - 1] regardless of the pad-width constants.
+    landingPadEnd = std::min(landingPadEnd, TERRAIN_POINTS - 1);
+    if (landingPadStart >= landingPadEnd) {
+        landingPadStart = landingPadEnd - 1;
+    }
 
     // Generate terrain points
     for (int i = 0; i < TERRAIN_POINTS; i++) {
@@ -662,10 +676,14 @@ void UpdateGame() {
                     if (lander.vel.length() < settings.safeLandingSpeed / 2.0f) {
                         landingScore += SCORE_SPEED_BONUS;
                     }
-                    // Check if landed in center of pad
-                    float padCenterX = (terrain[landingPadStart].x + terrain[landingPadEnd].x) / 2.0f;
-                    if (std::abs(lander.pos.x - padCenterX) < 20.0f) {
-                        landingScore += SCORE_CENTER_BONUS;
+                    // Check if landed in center of pad (guard indices defensively;
+                    // InitTerrain already clamps the pad into range).
+                    if (landingPadStart >= 0 &&
+                        landingPadEnd < static_cast<int>(terrain.size())) {
+                        float padCenterX = (terrain[landingPadStart].x + terrain[landingPadEnd].x) / 2.0f;
+                        if (std::abs(lander.pos.x - padCenterX) < 20.0f) {
+                            landingScore += SCORE_CENTER_BONUS;
+                        }
                     }
                     score += landingScore * level;  // Multiply by level
                 } else {
@@ -674,8 +692,7 @@ void UpdateGame() {
                     lander.vel = Vector2(0.0f, 0.0f);
                     gameState = GameState::CRASHED;
                     stateTimer = 0;  // Reset timer for state transition
-                    StopSound_Thrust();  // Stop thrust sound on crash
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));  // Brief delay to let audio device stabilize
+                    StopSound_Thrust();  // Stop thrust sound on crash (joins thread → device freed)
                     SpawnExplosion(lander.pos);
                     SpawnLanderDebris(lander.pos, lander.rotation);  // Break apart lander
                     PlaySound_Crash();
@@ -1253,8 +1270,9 @@ void RenderGame(PlatContext* ctx) {
                     padColor = MakeColor(255, 0, 0);       // Danger - red
                 }
 
-                if (landingPadStart < static_cast<int>(terrain.size()) &&
-                    landingPadEnd <= static_cast<int>(terrain.size())) {
+                if (landingPadStart >= 0 &&
+                    landingPadStart < static_cast<int>(terrain.size()) &&
+                    landingPadEnd < static_cast<int>(terrain.size())) {
                     int padY = terrain[landingPadStart].y;
                     int padStartX = terrain[landingPadStart].x;
                     int padEndX = terrain[landingPadEnd].x;
@@ -1737,35 +1755,68 @@ void UpdateHighScores(int newScore, int newLevel) {
 
 /**
  * @brief Save high scores to file
+ *
+ * Portable line-based text format (one entry per line: "score level name").
+ * The name is written last so it may safely contain spaces.
  */
 void SaveHighScores() {
-    std::ofstream file(HIGH_SCORE_FILE, std::ios::binary);
-    if (file.is_open()) {
-        for (const auto& score : highScores) {
-            file.write(reinterpret_cast<const char*>(&score), sizeof(HighScore));
-        }
-        file.close();
+    std::ofstream file(HIGH_SCORE_FILE, std::ios::trunc);
+    if (!file.is_open()) return;
+
+    file << HIGH_SCORE_MAGIC << ' ' << HIGH_SCORE_FORMAT_VERSION << '\n';
+    for (const auto& hs : highScores) {
+        file << hs.score << ' ' << hs.level << ' ' << hs.name << '\n';
     }
 }
 
 /**
  * @brief Load high scores from file
+ *
+ * Reads the portable text format written by SaveHighScores(). Files without a
+ * recognized header (e.g. the old raw-struct binaries) are ignored, and the
+ * list falls back to empty entries — a harmless one-time reset.
  */
 void LoadHighScores() {
-    std::ifstream file(HIGH_SCORE_FILE, std::ios::binary);
+    highScores.clear();
+
+    std::ifstream file(HIGH_SCORE_FILE);
     if (file.is_open()) {
-        highScores.clear();
-        HighScore score;
-        while (file.read(reinterpret_cast<char*>(&score), sizeof(HighScore))) {
-            highScores.push_back(score);
+        std::string header;
+        std::getline(file, header);
+
+        std::istringstream headerStream(header);
+        std::string magic;
+        int version = 0;
+        headerStream >> magic >> version;
+
+        if (magic == HIGH_SCORE_MAGIC && version == HIGH_SCORE_FORMAT_VERSION) {
+            std::string line;
+            while (highScores.size() < static_cast<size_t>(MAX_HIGH_SCORES) &&
+                   std::getline(file, line)) {
+                std::istringstream lineStream(line);
+                HighScore hs;
+                if (!(lineStream >> hs.score >> hs.level)) {
+                    continue;  // skip malformed lines
+                }
+
+                // The remainder of the line (after one separating space) is the
+                // name, which may contain spaces.
+                std::string name;
+                std::getline(lineStream, name);
+                if (!name.empty() && name.front() == ' ') {
+                    name.erase(0, 1);
+                }
+                strncpy(hs.name, name.c_str(), sizeof(hs.name) - 1);
+                hs.name[sizeof(hs.name) - 1] = '\0';
+
+                highScores.push_back(hs);
+            }
         }
-        file.close();
     }
 
     // Fill remaining slots with empty scores
     while (highScores.size() < static_cast<size_t>(MAX_HIGH_SCORES)) {
-        HighScore emptyScore;
-        highScores.push_back(emptyScore);
+        highScores.push_back(HighScore{});
     }
 }
 
@@ -1840,18 +1891,35 @@ void ResetSettings() {
 // ============================================================================
 
 /**
+ * @brief Thread-safe white-noise source for audio DSP.
+ *
+ * Audio generators run on background threads (the Win32 thrust thread, the
+ * macOS AudioQueue callback thread, and the detached crash thread), so they
+ * must not touch the game's shared `std::mt19937 gen`, which is only safe on
+ * the main thread. A `thread_local` engine gives each audio thread its own
+ * independent, lock-free stream in [-1, 1].
+ */
+static float AudioNoise() {
+    thread_local std::mt19937 rng(std::random_device{}());
+    thread_local std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    return dist(rng);
+}
+
+/**
  * @brief Generate realistic rocket engine sound buffer
  * Creates powerful rocket thrust with deep bass rumble and white noise
  */
 void GenerateRocketSound(short* buffer, int samples) {
-    static float filterState = 0.0f;
-    static float deepFilterState = 0.0f;
+    // thread_local: filter state must persist across successive buffer fills
+    // within one thrust session, but never be shared between audio threads.
+    thread_local float filterState = 0.0f;
+    thread_local float deepFilterState = 0.0f;
     const float filterAlpha = 0.15f;      // Low-pass filter
     const float deepFilterAlpha = 0.05f;   // Extra deep bass filter
 
     for (int i = 0; i < samples; i++) {
         // Generate white noise
-        float noise = static_cast<float>(rand() - RAND_MAX / 2) / static_cast<float>(RAND_MAX / 2);
+        float noise = AudioNoise();
 
         // Apply two stages of low-pass filtering for deeper rumble
         filterState = filterState * (1.0f - filterAlpha) + noise * filterAlpha;
@@ -1979,8 +2047,14 @@ void ThrustSoundThreadProc() {
  * @brief Start continuous thrust sound
  */
 void PlaySound_Thrust() {
-    if (!thrustSoundActive) {
-        thrustSoundActive = true;
+    // Atomic false->true transition guards against spawning two threads.
+    bool expected = false;
+    if (thrustSoundActive.compare_exchange_strong(expected, true)) {
+        // A prior thread must be fully joined before reassigning (assigning to
+        // a joinable std::thread calls std::terminate).
+        if (thrustSoundThread.joinable()) {
+            thrustSoundThread.join();
+        }
         thrustSoundThread = std::thread(ThrustSoundThreadProc);
     }
 }
@@ -1989,8 +2063,9 @@ void PlaySound_Thrust() {
  * @brief Stop continuous thrust sound
  */
 void StopSound_Thrust() {
-    if (thrustSoundActive) {
-        thrustSoundActive = false;
+    // Atomic true->false transition ensures exactly one caller joins the thread.
+    bool expected = true;
+    if (thrustSoundActive.compare_exchange_strong(expected, false)) {
         if (thrustSoundThread.joinable()) {
             thrustSoundThread.join();
         }
@@ -2004,14 +2079,16 @@ void StopSound_Thrust() {
  * Inspired by Asteroids, Defender, and Robotron explosions
  */
 void GenerateExplosionSound(short* buffer, int samples) {
-    static float filterState1 = 0.0f;
-    static float filterState2 = 0.0f;
+    // thread_local: each explosion runs on its own thread; per-thread state
+    // avoids a data race and starts every explosion from a clean filter.
+    thread_local float filterState1 = 0.0f;
+    thread_local float filterState2 = 0.0f;
 
     for (int i = 0; i < samples; i++) {
         float t = static_cast<float>(i) / samples;
 
         // Generate white noise for explosion texture
-        float noise = static_cast<float>(rand() - RAND_MAX / 2) / static_cast<float>(RAND_MAX / 2);
+        float noise = AudioNoise();
 
         // === PHASE 1: INITIAL IMPACT (0-5%) - The "KA-" ===
         float impact = 0.0f;
@@ -2096,41 +2173,50 @@ void GenerateExplosionSound(short* buffer, int samples) {
 #ifdef _WIN32
 
 /**
- * @brief Play crash sound effect with realistic explosion
+ * @brief Worker that synthesizes and plays the explosion (blocks until done).
+ * Runs on a detached thread so it never stalls the game/UI thread.
  */
-void PlaySound_Crash() {
+void CrashSoundThreadProc() {
     if (!InitAudio()) {
         Beep(100, 300);  // Fallback
         return;
     }
 
     const int bufferSize = 22050;  // 1 second explosion
-    short* explosionBuffer = new short[bufferSize];
-    GenerateExplosionSound(explosionBuffer, bufferSize);
+    std::vector<short> explosionBuffer(bufferSize);
+    GenerateExplosionSound(explosionBuffer.data(), bufferSize);
 
     WAVEHDR hdr = {};
-    hdr.lpData = reinterpret_cast<LPSTR>(explosionBuffer);
+    hdr.lpData = reinterpret_cast<LPSTR>(explosionBuffer.data());
     hdr.dwBufferLength = bufferSize * sizeof(short);
 
     waveOutPrepareHeader(hWaveOut, &hdr, sizeof(WAVEHDR));
     waveOutWrite(hWaveOut, &hdr, sizeof(WAVEHDR));
 
-    // Wait for sound to finish
+    // Wait for sound to finish (on this background thread only)
     while (!(hdr.dwFlags & WHDR_DONE)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     waveOutUnprepareHeader(hWaveOut, &hdr, sizeof(WAVEHDR));
-    delete[] explosionBuffer;
 }
 
 /**
- * @brief Play landing sound effect
+ * @brief Play crash sound effect with realistic explosion (non-blocking)
+ */
+void PlaySound_Crash() {
+    std::thread(CrashSoundThreadProc).detach();
+}
+
+/**
+ * @brief Play landing sound effect (non-blocking; Beep() is synchronous)
  */
 void PlaySound_Landing() {
-    Beep(800, 100);
-    Beep(600, 100);
-    Beep(400, 200);
+    std::thread([]() {
+        Beep(800, 100);
+        Beep(600, 100);
+        Beep(400, 200);
+    }).detach();
 }
 
 /**
@@ -2920,22 +3006,33 @@ void ThrustSoundThreadProc() {
 }
 
 void PlaySound_Thrust() {
-    if (!thrustSoundActive) {
-        thrustSoundActive = true;
+    // Atomic false->true transition guards against spawning two threads.
+    bool expected = false;
+    if (thrustSoundActive.compare_exchange_strong(expected, true)) {
+        // A prior thread must be fully joined before reassigning (assigning to
+        // a joinable std::thread calls std::terminate).
+        if (thrustSoundThread.joinable()) {
+            thrustSoundThread.join();
+        }
         thrustSoundThread = std::thread(ThrustSoundThreadProc);
     }
 }
 
 void StopSound_Thrust() {
-    if (thrustSoundActive) {
-        thrustSoundActive = false;
+    // Atomic true->false transition ensures exactly one caller joins the thread.
+    bool expected = true;
+    if (thrustSoundActive.compare_exchange_strong(expected, false)) {
         if (thrustSoundThread.joinable()) {
             thrustSoundThread.join();
         }
     }
 }
 
-void PlaySound_Crash() {
+/**
+ * @brief Worker that synthesizes and plays the explosion (blocks until done).
+ * Runs on a detached thread so it never stalls the game/UI thread.
+ */
+void CrashSoundThreadProc() {
     const int sampleRate = 22050;
     const int bufferSize = sampleRate;  // 1 second explosion
 
@@ -2971,10 +3068,22 @@ void PlaySound_Crash() {
     AudioQueueDispose(queue, true);
 }
 
+/**
+ * @brief Play crash sound effect with realistic explosion (non-blocking)
+ */
+void PlaySound_Crash() {
+    std::thread(CrashSoundThreadProc).detach();
+}
+
+/**
+ * @brief Play landing sound effect (non-blocking; MacBeep is synchronous)
+ */
 void PlaySound_Landing() {
-    MacBeep(800, 100);
-    MacBeep(600, 100);
-    MacBeep(400, 200);
+    std::thread([]() {
+        MacBeep(800, 100);
+        MacBeep(600, 100);
+        MacBeep(400, 200);
+    }).detach();
 }
 
 void PlaySound_MenuSelect() {

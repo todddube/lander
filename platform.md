@@ -525,10 +525,33 @@ All Phase 2 changes have been implemented in `lander.cpp` on the `phase1-foundat
 | RenderGame refactored to use PAL | Done | All ~870 lines of `RenderGame()` converted from direct GDI calls to PAL function calls. Function signature changed from `void RenderGame(HDC hdc)` to `void RenderGame(PlatContext* ctx)`. No direct GDI calls remain in rendering code. |
 | WindowProc WM_PAINT updated | Done | Paint handler now calls `PlatInitContext(hdc)` -> `PlatBeginFrame()` -> `RenderGame(ctx)` -> `PlatEndFrame(ctx, hdc)`. |
 
-### Phase 3: macOS Implementation — NOT STARTED
+### Phase 3: macOS Implementation — COMPLETE
 
-Remaining work: Cocoa window/event loop, Core Graphics PAL implementation, AudioToolbox sound.
+Implemented in `lander.cpp` (the file is compiled as Objective-C++ on macOS via `-x objective-c++`):
 
-### Phase 4: Build & Polish — NOT STARTED
+| Task | Status | Details |
+|---|---|---|
+| Cocoa window & event loop | Done | `NSApplication`, `NSWindow`, `GameView : NSView`, `keyDown:`/`keyUp:` mapping hardware keycodes to `VK_*` values, `main()` entry point. Game loop driven by `NSTimer` at ~60 FPS. |
+| Core Graphics PAL implementation | Done | Full `#ifdef __APPLE__` implementation of every `Plat*` drawing function using `CGContext` (shapes) and CoreText (`CTFont`/`CTLine`) for text. A Y-flip transform gives a top-left origin so game code is unchanged. |
+| AudioToolbox sound | Done | `AudioQueue` streaming for continuous thrust; `MacBeep` synthesizes sine-wave buffers for one-shot cues (fully asynchronous). Shares the platform-independent DSP generators. |
 
-Remaining work: CMakeLists.txt cross-platform update, `build.sh`, `Info.plist.in`, CI/CD updates.
+### Phase 4: Build & Polish — MOSTLY COMPLETE
+
+| Task | Status | Details |
+|---|---|---|
+| CMakeLists.txt cross-platform update | Done | `if(APPLE)` branch compiles as Objective-C++ and links `Cocoa`/`CoreGraphics`/`CoreText`/`AudioToolbox`; `elseif(WIN32)` keeps the resource/manifest path. |
+| macOS build script | Done | `build_mac.sh` (prefers CMake, falls back to direct `clang++`). Named `build_mac.sh` rather than `build.sh`. |
+| `Info.plist.in` / `.app` bundle | Not done | The macOS target builds a **bare executable** (`MACOSX_BUNDLE FALSE`). No `Info.plist.in` yet. |
+| CI/CD updates | Not done | `.github/workflows/build.yml` and `release.yml` still run **Windows-only**; no `macos-latest` job and no macOS release artifact. |
+
+### Remaining Cross-Platform Work
+
+- **macOS CI/CD:** add a `macos-latest` build job and a macOS release artifact (`.app`/`.dmg`/tarball).
+- **App bundle:** optional `Info.plist.in` + `MACOSX_BUNDLE TRUE` for a proper `.app`.
+- **Linux backend:** not started (`__linux__` unhandled) — would slot in behind the existing PAL.
+- **Finish non-rendering seams:** audio and the main-loop timer are still `#ifdef`-branched rather
+  than behind PAL-style interfaces; and Windows still uses blocking `Beep()` for some cues.
+- **Portable save files:** high scores use `reinterpret_cast` of a raw struct, which is not
+  portable across compiler/platform.
+
+See [`recommendation.md`](recommendation.md) for the full prioritized review of these items.

@@ -189,19 +189,28 @@ lander/
 ├── lander.cpp          # Main game source (single file, cross-platform)
 ├── CMakeLists.txt      # CMake build configuration (Windows + macOS)
 ├── build.bat           # Windows build script
+├── build_mac.sh        # macOS build script
 ├── VERSION             # Version number (e.g., 1.0.0)
 ├── version.h.in        # Version header template
 ├── lander.rc.in        # Windows resource template
+├── lander.manifest     # Windows DPI/UAC manifest
 ├── README.md           # This file
 ├── CHANGELOG.md        # Version history
 ├── CLAUDE.md           # AI development guidelines
+├── recommendation.md   # Code/project review & cleanup roadmap
+├── platform.md         # Cross-platform porting plan & status
+├── RELEASE.md          # Release process reference
+├── RELEASE_GUIDE.md    # Release quick guide
 ├── .gitignore          # Git exclusions
 ├── .github/
-│   └── workflows/      # GitHub Actions (CI/CD)
+│   └── workflows/      # GitHub Actions (CI/CD — Windows only today)
 │       ├── build.yml   # Build verification
 │       └── release.yml # Automated releases
 └── build/              # Build output directory
 ```
+
+> **Note:** CI/CD currently builds and releases **Windows only**, even though the game builds on
+> macOS. See [`recommendation.md`](recommendation.md) §4.2 for the plan to add macOS to CI.
 
 ---
 

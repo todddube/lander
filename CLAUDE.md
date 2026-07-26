@@ -6,17 +6,32 @@ This document provides context and guidelines for AI assistants (like Claude) wo
 
 ## Project Overview
 
-**Lunar Lander** is a classic arcade-style game written in modern C++17 for Windows. It's a single-file application that uses only the Windows SDK (Win32 API) for graphics, input, and sound.
+**Lunar Lander** is a classic arcade-style game written in modern C++17 for **Windows and macOS**.
+It's a single-file application that uses only each platform's native SDK for graphics, input, and
+sound — Win32 (GDI/WinMM) on Windows and Cocoa/CoreGraphics/CoreText/AudioToolbox on macOS. No
+third-party libraries are required.
+
+Platform-specific code lives behind a **Platform Abstraction Layer (PAL)** and `#ifdef _WIN32` /
+`#ifdef __APPLE__` guards, all within the single `lander.cpp`. On macOS the file is compiled as
+Objective-C++ (`-x objective-c++`). Linux is not currently supported.
 
 ### Design Philosophy
 - **Simplicity**: Single C++ file, no external dependencies
 - **Classic gameplay**: Faithful to the original lunar lander concept
 - **Modern code**: C++17 features, clean architecture, well-documented
 - **Self-contained**: Everything needed to build and run in one directory
+- **Portable core, native shells**: Game logic is platform-independent; only the PAL backends and
+  entry points are platform-specific
+
+> **See also:** [`recommendation.md`](recommendation.md) for the current best-practices review and
+> prioritized cleanup roadmap, and [`platform.md`](platform.md) for the cross-platform porting plan
+> and status.
 
 ---
 
 ## Quick Build Commands
+
+### Windows
 
 ```batch
 # Smart build (tries CMake, MSVC, MinGW in order)
@@ -33,16 +48,37 @@ cl /Zi /EHsc /std:c++17 /W4 /Fe:build\lander.exe lander.cpp user32.lib gdi32.lib
 g++ -std=c++17 -O2 -Wall -Wextra -o build\lander.exe lander.cpp -luser32 -lgdi32 -lwinmm -mwindows
 ```
 
+### macOS
+
+```bash
+# Smart build (prefers CMake, falls back to direct clang++)
+./build_mac.sh
+
+# CMake build
+cmake -B build -S .
+cmake --build build
+
+# Direct clang++ (compiled as Objective-C++, links Apple frameworks)
+clang++ -std=c++17 -O2 -x objective-c++ \
+    -framework Cocoa -framework CoreGraphics \
+    -framework CoreText -framework AudioToolbox \
+    -o build/lander lander.cpp
+```
+
 ---
 
 ## Architecture
 
 ### Single-File Design
-The entire game is in `lander.cpp` (~1200 lines). This intentional design choice:
+The entire game is in `lander.cpp` (~3,300 lines). This intentional design choice:
 - Makes the codebase easy to understand and navigate
 - Eliminates build complexity
 - Allows quick iteration and testing
 - Serves as an educational example
+
+The file grew substantially during the cross-platform migration because it now holds **two full
+graphics backends, two audio backends, and two OS entry points** alongside the shared game logic.
+The portable game logic itself remains compact; the size is platform-shell code behind `#ifdef`s.
 
 **DO NOT** split into multiple files unless explicitly requested.
 
@@ -56,40 +92,72 @@ The file is organized into clear sections marked by banner comments:
 // ============================================================================
 ```
 
-**Sections** (in order):
-1. **Platform Configuration** - Unicode setup, Windows targeting
-2. **System Includes** - Standard library and Windows headers
-3. **Game Constants** - Tweakable gameplay parameters
-4. **Core Data Structures** - Vector2, Lander, TerrainPoint, Particle, etc.
-5. **Global Game State** - All game state variables
-6. **Function Prototypes** - Forward declarations
-7. **Initialization Functions** - InitGame(), InitTerrain(), etc.
-8. **Game Loop Functions** - UpdateGame(), RenderGame()
-9. **Physics Functions** - UpdatePhysics(), ApplyThrust(), collision detection
-10. **Particle System** - Explosion and particle effects
-11. **Rendering Functions** - All drawing code
-12. **High Score Functions** - Save/load/update scores
-13. **Sound Functions** - Beep-based sound effects
-14. **Utility Functions** - Lerp, Clamp, etc.
-15. **Windows Message Handling** - WindowProc(), WinMain()
+**Sections** (in order — approximate line ranges):
+1. **Platform Configuration** - `#include` guards for `<windows.h>` (Win) / Cocoa+CoreGraphics+CoreText+AudioToolbox (mac); VK_* mappings for macOS
+2. **System / Library Includes** - Standard library headers; version header (`__has_include("version.h")` with `-D` fallback)
+3. **Platform Abstraction Types** - `PlatColor`, color helpers, portable `POINT`
+4. **Platform Abstraction Layer (PAL) — Drawing Interface** - `PlatContext` + `PlatDraw*` declarations
+5. **Game Constants** - Tweakable gameplay parameters
+6. **Core Data Structures** - Vector2, Lander, TerrainPoint, Particle, Shockwave, Star, GameSettings, etc.
+7. **Global Game State** - All game state variables (currently ~30 file-scope globals)
+8. **Function Prototypes** - Forward declarations
+9. **Initialization Functions** - InitGame(), InitTerrain(), etc.
+10. **Game Loop Functions** - UpdateGame(), RenderGame()
+11. **Physics Functions** - UpdatePhysics(), ApplyThrust(), collision detection
+12. **Particle System** - Explosion and particle effects
+13. **Rendering Functions** - All drawing code (calls PAL, not GDI/CG directly)
+14. **High Score Functions** - Save/load/update scores
+15. **Settings Functions** - Load/save `lander.ini`
+16. **Sound Functions** - Shared PCM generators + platform sinks (WinMM waveOut / macOS AudioQueue)
+17. **Utility Functions** - Lerp, Clamp, etc.
+18. **Portable Event Handlers** - `HandleKeyDown` / `HandleQuit`, shared by both platforms
+19. **PAL Windows Implementation** - GDI-backed `Plat*` functions (`#ifdef _WIN32`)
+20. **PAL macOS Implementation** - CoreGraphics/CoreText/AudioToolbox `Plat*` functions (`#ifdef __APPLE__`, Objective-C++)
+21. **macOS Window & Entry Point** - `NSApplication`/`NSWindow`/`NSView`, `main()`
+22. **Windows Message Handling** - WindowProc(), WinMain()
+
+### Platform Abstraction Layer (PAL)
+
+Rendering is fully decoupled from the OS. `RenderGame(PlatContext* ctx)` calls only `Plat*`
+functions (e.g. `PlatDrawLine`, `PlatDrawPolygonFilled`, `PlatDrawText`), declared once and
+implemented twice — once with GDI (`#ifdef _WIN32`) and once with CoreGraphics/CoreText
+(`#ifdef __APPLE__`). Both backends present a **top-left origin** coordinate system; the macOS
+backend applies a Y-flip transform so game code needs no per-platform coordinate logic.
+
+Colors use the portable `PlatColor` type (`0x00RRGGBB`); `PlatColorToNative` /
+`NativeToPlatColor` convert to/from Windows `COLORREF` where needed.
+
+**When adding rendering:** add a `Plat*` call, and implement it in *both* backends. Never call GDI
+or CoreGraphics directly from game/render logic.
+
+> **Note:** Audio and the main-loop timer are **not** yet behind a PAL-style interface — they are
+> `#ifdef`-branched with duplicated function names. See [`recommendation.md`](recommendation.md)
+> §2.4 for the plan to finish those seams.
 
 ### Game Loop
 
-The game uses a **timer-based loop** (not a traditional while loop):
+The game uses a **timer-based loop** (not a traditional while loop) on both platforms:
 
+**Windows** (Win32 message loop):
 ```cpp
 // In WM_CREATE:
 SetTimer(hwnd, 1, TARGET_FRAME_TIME, nullptr);  // 16ms = ~60 FPS
 
 // In WM_TIMER:
 UpdateGame();
-InvalidateRect(hwnd, nullptr, FALSE);  // Triggers WM_PAINT
+InvalidateRect(hwnd, nullptr, FALSE);           // Triggers WM_PAINT
 
 // In WM_PAINT:
-RenderGame(hdc);
+PlatInitContext(hdc); PlatBeginFrame();
+RenderGame(ctx);
+PlatEndFrame(ctx, hdc);
 ```
 
-This approach integrates with Windows message loop and prevents blocking.
+**macOS** (Cocoa run loop): an `NSTimer` at ~60 FPS calls `UpdateGame()` and marks the view dirty;
+`GameView drawRect:` obtains a `CGContext`, wraps it in a `PlatContext`, and calls `RenderGame`.
+
+Both approaches integrate with the native run loop and avoid a busy-wait. **Note:** the timer/loop
+is not yet abstracted behind a common seam — see [`recommendation.md`](recommendation.md) §2.4.
 
 ### State Machine
 
@@ -204,17 +272,23 @@ BitBlt(hdc, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, hdcMem, 0, 0, SRCCOPY);
 
 ### Sound Generation
 
-Using Windows `Beep()` function:
-```cpp
-Beep(frequency_hz, duration_ms);
-```
+Audio is **synthesized PCM**, not simple beeps. The DSP that generates samples is shared
+(`GenerateRocketSound`, `GenerateExplosionSound`); only the output sink is platform-specific:
+
+- **Windows:** WinMM `waveOut*` — double-buffered streaming for continuous thrust; a background
+  thread refills buffers. Some short cues (menu/landing/intro) still use blocking `Beep()`.
+- **macOS:** AudioToolbox `AudioQueue` — streaming thrust plus a `MacBeep` helper that synthesizes
+  a sine-wave buffer for one-shot cues (fully asynchronous).
 
 **Sound effects:**
-- Thrust: 200 Hz, 20ms (short beep)
-- Crash: 100 Hz, 300ms (low rumble)
-- Landing: 800→600→400 Hz sequence (musical)
+- Thrust: continuous synthesized rocket rumble (streamed, varies over time)
+- Crash: multi-phase synthesized explosion ("KABOOM")
+- Landing / menu / intro: short tonal cues
 
-**Note:** Beep is synchronous (blocks), so keep durations short.
+**Note:** on Windows the remaining `Beep()` cues are synchronous (they block the calling thread).
+Prefer the async PCM path; see [`recommendation.md`](recommendation.md) §1.3 and §2.4. Audio state
+is touched from a background thread — keep DSP filter state per-stream and guard shared flags with
+`std::atomic`.
 
 ---
 
@@ -285,49 +359,56 @@ Version is stored in `VERSION` file (e.g., `1.0.0`).
 
 ### Resource Compilation
 
-`lander.rc` contains Windows version info. It's compiled by:
-- CMake: Automatically as part of `add_executable()`
+`lander.rc.in` is the template for Windows version info; CMake runs `configure_file()` to produce
+`build/lander.rc` (injecting the version). It's compiled by:
+- CMake: Automatically as part of `add_executable()` (Windows only)
 - build.bat: Calls `rc.exe` if available
-- Manual: `rc.exe /fo build\lander.res lander.rc`
+- Manual: `rc.exe /fo build\lander.res build\lander.rc`
 
-Link the `.res` file with the executable for embedded version info.
+Link the `.res` file with the executable for embedded version info. macOS has no equivalent
+resource step (bundle metadata would come from an `Info.plist`; the current build produces a bare
+executable — see `CMakeLists.txt`).
 
 ---
 
 ## Platform-Specific Notes
 
-### Windows API Usage
+### Windows API Usage (behind `#ifdef _WIN32`)
 
-**Graphics (GDI):**
-- `CreatePen()`, `SelectObject()`, `DeleteObject()` - Drawing tools
-- `MoveToEx()`, `LineTo()`, `Polyline()` - Vector drawing
-- `TextOut()`, `DrawText()` - Text rendering
-- `CreateFont()` - Font creation
+**Graphics (GDI):** `CreatePen`/`SelectObject`/`DeleteObject`, `MoveToEx`/`LineTo`/`Polyline`,
+`TextOutA`/`DrawTextA`, `CreateFontA` — all wrapped by the Win32 PAL implementation.
+**Input:** `WM_KEYDOWN`/`WM_KEYUP`, `WM_CHAR`, virtual key codes (`VK_UP`, `VK_SPACE`, …).
+**Timing:** `SetTimer` / `WM_TIMER`.
+**Audio:** WinMM `waveOut*` (streaming) + `Beep` (short cues).
+**Entry point:** `WinMain`.
 
-**Input:**
-- `WM_KEYDOWN`, `WM_KEYUP` - Keyboard events
-- `WM_CHAR` - Character input for text entry
-- Virtual key codes: `VK_UP`, `VK_SPACE`, etc.
+### macOS API Usage (behind `#ifdef __APPLE__`, Objective-C++)
 
-**Timing:**
-- `SetTimer()` - Creates periodic timer
-- `WM_TIMER` - Timer event message
+**Graphics:** CoreGraphics (`CGContext*`) for shapes, CoreText (`CTFont`/`CTLine`) for text —
+wrapped by the macOS PAL implementation. A Y-flip transform gives a top-left origin.
+**Input:** `NSView keyDown:/keyUp:`; hardware keycodes mapped to the same `VK_*` values (see the
+`VK_*` `#define`s at the top of the file).
+**Timing:** `NSTimer` on the main run loop.
+**Audio:** AudioToolbox `AudioQueue` (streaming) + `MacBeep` sine synthesis (short cues).
+**Entry point:** `main()` → `NSApplication`.
 
-**Unicode:**
-- All strings are `wchar_t*` / `L"string"`
-- Use wide-character functions: `wcslen()`, `StringCchPrintf()`
+### Strings / Encoding (both platforms)
+
+- All strings are `char*` / `"string"` (UTF-8). **No `wchar_t` / `L""`.**
+- Use `snprintf`, `strncpy`, `std::string`, `std::ifstream`/`std::ofstream`.
+- On Windows, GDI is used via the `A`-suffix (ANSI/UTF-8) entry points (`TextOutA`, `DrawTextA`,
+  `CreateFontA`, `RegisterClassA`, `CreateWindowExA`, `DefWindowProcA`).
 
 ### Compilation Requirements
 
-**Required libraries:**
-- `user32.lib` - Window management
-- `gdi32.lib` - Graphics
-- `winmm.lib` - Multimedia (Beep sound)
+**Windows — required libraries:** `user32.lib`, `gdi32.lib`, `winmm.lib`.
+**macOS — required frameworks:** `Cocoa`, `CoreGraphics`, `CoreText`, `AudioToolbox`; compile with
+`-x objective-c++`.
 
-**Required flags:**
-- `/std:c++17` or `-std=c++17` - C++17 standard
-- `WIN32` defined - Windows GUI app
-- `/W4` or `-Wall -Wextra` - High warning level
+**Required flags (both):**
+- `/std:c++17` or `-std=c++17` — C++17 standard
+- `/W4` (MSVC) or `-Wall -Wextra -Wpedantic` (clang/GCC) — high warning level
+- Windows: `WIN32` defined (GUI app)
 
 ---
 
@@ -351,6 +432,11 @@ When making changes, verify:
 - [ ] High score entry works
 - [ ] High scores save and load
 - [ ] Sound effects play
+
+**Cross-platform:** any change touching rendering, input, audio, timing, or file I/O must be
+verified on **both Windows and macOS** — the two backends can diverge silently (e.g. text metrics,
+audio timing, save-file layout). CI currently builds Windows only (see
+[`recommendation.md`](recommendation.md) §4.2), so macOS verification is manual for now.
 
 ---
 
@@ -381,12 +467,14 @@ When making changes, verify:
    - Ensure `SaveHighScores()` is called
 
 **printf debugging:**
-Since this is a Windows GUI app, `printf()` won't show output. Use:
+On Windows this is a GUI app, so `printf()` to stdout won't show. Use:
 ```cpp
-MessageBox(nullptr, L"Debug message", L"Debug", MB_OK);
-// Or
-OutputDebugString(L"Debug message\n");  // View in debugger
+// Windows
+OutputDebugStringA("Debug message\n");            // View in debugger / DebugView
+MessageBoxA(nullptr, "Debug message", "Debug", MB_OK);
 ```
+On **macOS** the executable runs from a terminal, so `printf`/`fprintf(stderr, ...)` work directly,
+and `NSLog(@"...")` appears in Console.app. (Note: strings are now `char*`/UTF-8 — no `L""`.)
 
 ---
 
