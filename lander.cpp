@@ -1,12 +1,16 @@
 /**
  * @file lander.cpp
- * @brief Classic lunar lander game for Windows
+ * @brief Classic lunar lander game for Windows and macOS
  * @author Todd Dube
  * @copyright Copyright (c) 2025 Todd Dube
  *
  * A classic lunar lander game with physics simulation, terrain generation,
  * and multiple difficulty levels. Navigate your lander to safe landing zones
  * while managing fuel and velocity.
+ *
+ * Cross-platform via a Platform Abstraction Layer (PAL): Win32/GDI/WinMM on
+ * Windows and Cocoa/CoreGraphics/CoreText/AudioToolbox on macOS. Portable game
+ * logic is shared; only the PAL backends and entry points are platform-specific.
  */
 
 // ============================================================================
@@ -1990,21 +1994,23 @@ void ThrustSoundThreadProc() {
     }
 
     const int bufferSize = 4410;  // 0.2 seconds at 22050 Hz
-    short* buffer1 = new short[bufferSize];
-    short* buffer2 = new short[bufferSize];
+    // RAII: buffers free themselves on any exit path (they outlive the
+    // waveOut usage below since this proc runs the whole sound's lifetime).
+    std::vector<short> buffer1(bufferSize);
+    std::vector<short> buffer2(bufferSize);
 
     // Initialize headers
     std::memset(&waveHeader[0], 0, sizeof(WAVEHDR));
     std::memset(&waveHeader[1], 0, sizeof(WAVEHDR));
 
-    waveHeader[0].lpData = reinterpret_cast<LPSTR>(buffer1);
+    waveHeader[0].lpData = reinterpret_cast<LPSTR>(buffer1.data());
     waveHeader[0].dwBufferLength = bufferSize * sizeof(short);
-    waveHeader[1].lpData = reinterpret_cast<LPSTR>(buffer2);
+    waveHeader[1].lpData = reinterpret_cast<LPSTR>(buffer2.data());
     waveHeader[1].dwBufferLength = bufferSize * sizeof(short);
 
     // Generate initial sound data for both buffers
-    GenerateRocketSound(buffer1, bufferSize);
-    GenerateRocketSound(buffer2, bufferSize);
+    GenerateRocketSound(buffer1.data(), bufferSize);
+    GenerateRocketSound(buffer2.data(), bufferSize);
 
     // Prepare and queue both buffers
     waveOutPrepareHeader(hWaveOut, &waveHeader[0], sizeof(WAVEHDR));
@@ -2034,13 +2040,10 @@ void ThrustSoundThreadProc() {
         currentBuffer = 1 - currentBuffer;  // Swap buffers
     }
 
-    // Cleanup
+    // Cleanup (buffers are freed automatically by std::vector)
     waveOutReset(hWaveOut);
     waveOutUnprepareHeader(hWaveOut, &waveHeader[0], sizeof(WAVEHDR));
     waveOutUnprepareHeader(hWaveOut, &waveHeader[1], sizeof(WAVEHDR));
-
-    delete[] buffer1;
-    delete[] buffer2;
 }
 
 /**

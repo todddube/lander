@@ -265,6 +265,8 @@ See [Releases](https://github.com/todddube/lander/releases) for download.
 
 ## License
 
+Licensed under the [MIT License](LICENSE).
+
 Copyright (c) 2025 Todd Dube
 
 ---

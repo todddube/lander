@@ -36,8 +36,13 @@ Makefile
 .idea/
 *.iml
 
-# Game data files
+# Game data files (generated at runtime)
 lander_scores.dat
+lander.ini
+
+# clangd / editor index cache
+.cache/
+compile_commands.json
 
 # Temporary files
 *.tmp

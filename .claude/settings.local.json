@@ -22,7 +22,12 @@
       "Bash(bash build_mac.sh)",
       "Bash(xcodebuild -version)",
       "Bash(sw_vers)",
-      "Bash(bash build_mac.sh Debug 2>&1)"
+      "Bash(bash build_mac.sh Debug 2>&1)",
+      "Bash(git branch *)",
+      "Bash(git push *)",
+      "Bash(grep -rn \"game for Windows\\\\|only Windows\\\\|Windows-only\\\\|for Windows$\" CLAUDE.md README.md)",
+      "Bash(git rm *)",
+      "Bash(python3 -c \"import yaml,sys; d=yaml.safe_load\\(open\\('.github/workflows/build.yml'\\)\\); print\\('jobs:', list\\(d['jobs'].keys\\(\\)\\)\\)\")"
     ],
     "deny": [],
     "ask": []

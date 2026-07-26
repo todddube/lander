@@ -147,7 +147,7 @@ slot in behind the PAL.
 
 | # | Issue | Location | Fix |
 |---|---|---|---|
-| 3.1 | Raw `new[]`/`delete[]` for audio buffers — not exception-safe | `1925-1926`, `2108` | Use `std::vector<short>` |
+| 3.1 ✅ | Raw `new[]`/`delete[]` for audio buffers — not exception-safe | `1925-1926`, `2108` | **Done** — now `std::vector<short>` |
 | 3.2 | Particle `type` is a magic `int` (0–5) | `233`, `1066`, `1294` | `enum class ParticleType` |
 | 3.3 | Parallel settings arrays hardcoded to size 5, duplicated in two places | `2340-2349`, `1648-1654` | Single source of truth (array of structs / named count) |
 | 3.4 | Per-frame `CreateFontA`/`DeleteObject` on every text draw | `2494-2520` | Cache fonts by (size, bold) |
@@ -176,23 +176,23 @@ The docs describe an older program. Corrected in this review pass:
 - **`CHANGELOG.md`** only documents 1.0.0 as Windows-only "~1200 lines"; VERSION is 1.0.2 with no
   macOS entry. → Recommend adding 1.0.1 / 1.0.2 entries covering the cross-platform work.
 
-### 4.2 CI/CD is Windows-only
-Both `.github/workflows/build.yml` and `release.yml` run only on `windows-latest` and ship only a
-Windows ZIP. The macOS code path is never built in CI, so a macOS regression would go unnoticed,
-and there is no macOS artifact for users.
-**Recommendation:** add a `macos-latest` job to `build.yml` (build via CMake / `build_mac.sh`) and
-a macOS artifact (`.app`/`.dmg`/tarball) to `release.yml`.
+### 4.2 CI/CD is Windows-only — ✅ build partly addressed
+Both `.github/workflows/build.yml` and `release.yml` ran only on `windows-latest`.
+**Done:** `build.yml` now has a `build-macos` job (CMake on `macos-latest`) alongside
+`build-windows`, so both platforms build on every push and a macOS regression is caught.
+**Still open:** `release.yml` remains Windows-only — it does not yet produce a macOS release
+artifact (`.app`/`.dmg`/tarball). That's a follow-up.
 
-### 4.3 Missing LICENSE file
+### 4.3 Missing LICENSE file — ✅ done
 `README.md` states "Copyright (c) 2025 Todd Dube" and `release.yml:58` does
-`cp LICENSE || echo "No LICENSE found"`, but there is no `LICENSE` file in the repo.
-**Recommendation:** add a `LICENSE` (the copyright notice implies "all rights reserved"; pick an
-explicit license — MIT is common for a project like this — or state the intended terms).
+`cp LICENSE || echo "No LICENSE found"`, but there was no `LICENSE` file in the repo.
+**Done:** added an **MIT** `LICENSE`; README License section links to it.
 
-### 4.4 Tracked build/cache artifacts
-`.cache/clangd/index/lander.cpp.*.idx` is tracked in git. It's a local IDE cache.
-**Recommendation:** add `.cache/` to `.gitignore` and `git rm --cached` the tracked index. Also
-consider whether `.claude/settings.local.json` (local-only settings) belongs in version control.
+### 4.4 Tracked build/cache artifacts — ✅ done
+`.cache/clangd/index/lander.cpp.*.idx` was tracked in git.
+**Done:** added `.cache/`, `lander.ini`, and `compile_commands.json` to `.gitignore` and
+untracked the committed clangd index. (Still worth deciding whether
+`.claude/settings.local.json` belongs in version control — left as-is for now.)
 
 ### 4.5 README structure block out of date
 `README.md`'s "Project Structure" omits `platform.md`, `build_mac.sh`, `CHANGELOG.md`,
@@ -202,12 +202,18 @@ consider whether `.claude/settings.local.json` (local-only settings) belongs in 
 
 ## Quick Wins (low effort, high value)
 
-1. Add the bounds guard at `lander.cpp:666` (1.1) — prevents a potential crash.
-2. Replace the three raw `new[]` audio buffers with `std::vector<short>` (3.1).
-3. Add `.cache/` to `.gitignore` and untrack the clangd index (4.4).
-4. Add a `LICENSE` file (4.3).
-5. Add a `macos-latest` job to `build.yml` (4.2) — catches macOS build breaks immediately.
-6. Fix the file-header comment at `lander.cpp:3` (4.1).
+> **Status: ✅ Done (2026-07-26).** All quick wins below are implemented.
+
+1. ✅ Add the bounds guard at `lander.cpp:666` (1.1) — done as part of Priority 1.
+2. ✅ Replace the raw `new[]` audio buffers with `std::vector<short>` (3.1) — crash buffer done in
+   P1.3; thrust buffers (`ThrustSoundThreadProc`) now use `std::vector<short>` too. No raw
+   `new[]`/`delete[]` remain in the audio path.
+3. ✅ Add `.cache/` (and `lander.ini`, `compile_commands.json`) to `.gitignore` and untrack the
+   committed clangd index (4.4).
+4. ✅ Add a `LICENSE` file (4.3) — MIT; README License section updated to link it.
+5. ✅ Add a `build-macos` job to `build.yml` (4.2) — CI now builds Windows **and** macOS on every
+   push. (Renamed the Windows job `build` → `build-windows` for clarity.)
+6. ✅ Fix the file-header comment at `lander.cpp:3` (4.1) — now "for Windows and macOS" with a PAL note.
 
 ---
 
